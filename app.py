@@ -99,9 +99,16 @@ def get_live_prices():
 # SIDEBAR INPUTS
 # ------------------------------
 st.sidebar.header("Data & Inputs")
+if "refresh_prices" not in st.session_state:
+    st.session_state.refresh_prices = False
+
 if st.sidebar.button("↻ Refresh prices"):
     st.cache_data.clear()
+    st.session_state.refresh_prices = True
     st.experimental_rerun()
+
+if st.session_state.refresh_prices:
+    st.session_state.refresh_prices = False
 
 blend_prices, failures, fetched_at = get_live_prices()
 rin_prices = DEFAULT_RIN_PRICES.copy()
