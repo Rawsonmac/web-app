@@ -6,6 +6,7 @@ import requests
 from requests.exceptions import RequestException
 import os
 import json
+from streamlit_echarts import st_echarts  # Optional: for pie chart
 
 st.title("RIN-LCFS Compliance Cost Optimizer")
 st.markdown("This tool recommends the cheapest fuel blending strategy to meet EPA RFS + LCFS compliance targets.")
@@ -88,10 +89,10 @@ rin_d3 = st.sidebar.number_input('D3 RIN Price ($/RIN)', value=rin_prices['D3'],
 lcfs_credit_price = st.sidebar.number_input('LCFS Credit Price ($/MT CO₂)', value=lcfs_credit_price, step=0.1)
 rin_prices = {'D6': rin_d6, 'D4': rin_d4, 'D5': rin_d5, 'D3': rin_d3}
 
-import json
-
-with open('blendstocks.json', 'r') as f:
-    blendstock_data = json.load(f)
+# Blendstock data
+try:
+    with open('blendstocks.json', 'r') as f:
+        blendstock_data = json.load(f)
 except FileNotFoundError:
     st.error("Error: 'blendstocks.json' not found. Please ensure the file exists in the project directory.")
     st.stop()
@@ -99,15 +100,6 @@ except json.JSONDecodeError:
     st.error("Error: Invalid JSON format in 'blendstocks.json'. Please check the file content.")
     st.stop()
 
-blendstocks = pd.DataFrame({
-    'name': list(blendstock_data.keys()),
-    'base_price': [blend_prices.get(name, data['base_price']) for name, data in blendstock_data.items()],
-    'rin_type': [data['rin_type'] for data in blendstock_data.values()],
-    'rin_yield': [data['rin_yield'] for data in blendstock_data.values()],
-    'lcfs_credits': [data['lcfs_credits'] for data in blendstock_data.values()]
-})   
-
-    
 blendstocks = pd.DataFrame({
     'name': list(blendstock_data.keys()),
     'base_price': [blend_prices.get(name, data['base_price']) for name, data in blendstock_data.items()],
@@ -206,31 +198,35 @@ if result.success:
     st.write(f"**Total RINs Generated:** {total_rins:,.2f}")
     st.write(f"**Total LCFS Credits:** {total_lcfs:,.2f} MT CO₂")
     
-    # Pie chart
+    # Pie chart (using streamlit-echarts)
     non_zero_volumes = blendstocks[blendstocks['blended_volume'] > 0]
     if not non_zero_volumes.empty:
         st.subheader("Blend Composition")
         chart_data = {
-            "type": "pie",
-            "data": {
-                "labels": non_zero_volumes['name'].tolist(),
-                "datasets": [{
-                    "data": non_zero_volumes['blended_volume'].tolist(),
-                    "backgroundColor": ["#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF"],
-                }]
-            },
-            "options": {
-                "plugins": {
-                    "legend": {"position": "top"},
-                    "title": {"display": True, "text": "Blend Composition by Volume"}
+            "tooltip": {"trigger": "item"},
+            "legend": {"top": "5%", "left": "center"},
+            "series": [{
+                "name": "Blend Composition",
+                "type": "pie",
+                "radius": "50%",
+                "data": [
+                    {"value": vol, "name": name}
+                    for name, vol in zip(non_zero_volumes['name'], non_zero_volumes['blended_volume'])
+                ],
+                "emphasis": {
+                    "itemStyle": {
+                        "shadowBlur": 10,
+                        "shadowOffsetX": 0,
+                        "shadowColor": "rgba(0, 0, 0, 0.5)"
+                    }
                 }
-            }
+            }]
         }
-        st.write("The following chart shows the proportion of each blendstock in the optimized blend:")
-        st.json(chart_data)  # Note: Streamlit may need a charting library for this
+        st_echarts(options=chart_data, height="400px")
 else:
-    st.error("Optimization failed. Please adjust inputs and try again.")
+    st.error(f"Optimization failed: {result.message}. Try adjusting the total volume or ethanol ratio.")
+    st.stop()
 
 # Reset button
 if st.button("Reset Inputs"):
-    st.experimental_rerun()
+    st.rerun()
