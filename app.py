@@ -1,18 +1,3 @@
-# RIN-LCFS Compliance Cost Optimizer – Streamlit App (Non‑linear Specs + Multi‑Objective + Sensitivity)
-
-"""
-Major upgrades implemented (items 1 & 2 from your list):
-1. **Better chemistry/specs**
-   - Optional **non‑linear RVP blend calc** (Antoine-style log mix approximation). Falls back to linear if unchecked.
-   - Added **Sulfur, Aromatics, Oxygen, Benzene, CI (gCO2e/MJ)** specs with min/max toggles.
-2. **Smarter optimization**
-   - **Multi‑objective slider**: minimize Cost vs Carbon Intensity (or BTU) via weighted sum.
-   - **Sensitivity/Tornado analysis**: ±10% shocks on key inputs (RINs, LCFS, prices) with chart.
-   - **Shadow prices / duals**: show which constraints bind and their marginal cost.
-
-NOTE: Non-linear RVP uses a simple log-sum approximation. For true non-linear mixing, move to Pyomo. This keeps it solvable via LP by linearizing or switching off. Here we solve LP; when non-linear is enabled we do a quick iterative linearization.
-"""
-
 import pandas as pd
 import numpy as np
 from scipy.optimize import linprog
@@ -23,12 +8,11 @@ import altair as alt
 
 st.set_page_config(page_title="RIN / LCFS Optimizer", layout="wide")
 
-
 st.title("OIL BROKERAGE")
 st.markdown(
     """
     Optimize blend cost with **RIN / LCFS credits** and meet **spec constraints** (RVP, Octane, BTU, Sulfur, Aromatics, Oxygen, Benzene, CI). 
-    Choose single or **multi‑objective** mode and run **sensitivity** instantly.
+    Choose single or **multi-objective** mode and run **sensitivity** instantly.
     """
 )
 
@@ -143,13 +127,15 @@ if failures:
 # ------------------------------
 # MAIN INPUTS
 # ------------------------------
-col1,col2,col3 = st.columns(3)
+col1,col2,col3,col4 = st.columns(4)
 with col1:
     total_volume = st.number_input("Total Volume (gal)", value=100_000, min_value=0)
 with col2:
     min_ethanol_ratio = st.slider("Min Ethanol %", 0.0, 1.0, 0.10)
 with col3:
     show_charts = st.checkbox("Charts", True)
+with col4:
+    market_price = st.number_input("Market Price ($/gal)", value=3.00, min_value=0.0)
 
 st.markdown("### Spec Constraints")
 s1,s2,s3 = st.columns(3)
@@ -312,8 +298,34 @@ if res.success:
 
     st.caption(f"Specs -> Sulfur {act_sul:.1f} ppm | Arom {act_ar:.1f}% | Oxy {act_oxy:.1f}% | Benz {act_bz:.2f}% | CI {act_ci:.1f} g/MJ")
 
+    # ------------------------------
+    # PROFIT CALCULATION
+    # ------------------------------
+    st.subheader("Expected Profit")
+    revenue = market_price * total_volume
+    profit = revenue - total_cost
+    profit_per_gal = profit / total_volume if total_volume else 0
+
+    c1, c2 = st.columns(2)
+    c1.metric("Total Profit", f"${profit:,.2f}")
+    c2.metric("Profit per Gallon", f"${profit_per_gal:,.3f}")
+
     view_cols=['name','base_price','effective_price','rvp','octane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
-    nice = blendstocks[view_cols].rename(columns={'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','btu':'BTU','sulfur_ppm':'Sulfur ppm','arom_pct':'Arom %','oxy_pct':'Oxygen %','benz_pct':'Benz %','ci_gmj':'CI g/MJ','blended_volume':'Gallons','blended_cost':'Total $'})
+    nice = blendstocks[view_cols].rename(columns={
+        'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','btu':'BTU',
+        'sulfur_ppm':'Sulfur ppm','arom_pct':'Arom %','oxy_pct':'Oxygen %','benz_pct':'Benz %',
+        'ci_gmj':'CI g/MJ','blended_volume':'Gallons','blended_cost':'Total $'
+    })
+
+    # Add summary row for totals and profit
+    summary = pd.DataFrame({
+        'Component': ['Total'],
+        'Base $/gal': [''], 'Net $/gal': [avg_cost], 'RVP': [act_rvp], 'Octane': [act_oct], 'BTU': [act_btu],
+        'Sulfur ppm': [act_sul], 'Arom %': [act_ar], 'Oxygen %': [act_oxy], 'Benz %': [act_bz], 'CI g/MJ': [act_ci],
+        'Gallons': [total_volume], 'Total $': [total_cost], 'Revenue $': [revenue], 'Profit $': [profit]
+    })
+    nice = pd.concat([nice, summary], ignore_index=True)
+
     st.subheader("Optimized Blend")
     st.dataframe(nice)
 
@@ -321,19 +333,63 @@ if res.success:
     st.download_button("Download CSV", csv, file_name="blend_optimization.csv", mime="text/csv")
 
     if show_charts:
-        vol_chart = alt.Chart(nice).mark_arc().encode(theta=alt.Theta("Gallons:Q"), color="Component:N", tooltip=["Component","Gallons"])
-        price_chart = alt.Chart(nice).mark_bar(size=40).encode(
-    x=alt.X("Component:N", axis=alt.Axis(labelAngle=-15)),
-    y=alt.Y("Net $/gal:Q", title="Net $/gal"),
-    tooltip=["Component", "Net $/gal"]
-).properties(height=300)
+        vol_chart = alt.Chart(nice[:-1]).mark_arc().encode(
+            theta=alt.Theta("Gallons:Q"), 
+            color="Component:N", 
+            tooltip=["Component","Gallons"]
+        )
+        price_chart = alt.Chart(nice[:-1]).mark_bar(size=40).encode(
+            x=alt.X("Component:N", axis=alt.Axis(labelAngle=-15)),
+            y=alt.Y("Net $/gal:Q", title="Net $/gal"),
+            tooltip=["Component", "Net $/gal"]
+        ).properties(height=300)
         st.altair_chart(vol_chart, use_container_width=True)
         st.altair_chart(price_chart, use_container_width=True)
+
+        # Profit breakdown chart
+        profit_data = pd.DataFrame({
+            'Category': ['Revenue', 'Total Cost', 'Profit'],
+            'Value': [revenue, total_cost, profit]
+        })
+        ```chartjs
+        {
+            "type": "pie",
+            "data": {
+                "labels": ["Revenue", "Total Cost", "Profit"],
+                "datasets": [{
+                    "data": [revenue, total_cost, profit],
+                    "backgroundColor": ["#36A2EB", "#FF6384", "#4CAF50"],
+                    "borderColor": ["#FFFFFF", "#FFFFFF", "#FFFFFF"],
+                    "borderWidth": 1
+                }]
+            },
+            "options": {
+                "responsive": true,
+                "plugins": {
+                    "legend": {
+                        "position": "top",
+                        "labels": { "color": "#000000" }
+                    },
+                    "title": {
+                        "display": true,
+                        "text": "Profit Breakdown",
+                        "color": "#000000"
+                    },
+                    "tooltip": {
+                        "callbacks": {
+                            "label": function(context) {
+                                return context.label + ': $' + context.parsed.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ```
 
     # Shadow prices / duals
     st.subheader("Constraint Shadow Prices (marginals)")
     try:
-        # SciPy highs returns .ineqlin / .eqlin with marginals
         m_e = res.eqlin.marginals if hasattr(res, 'eqlin') else []
         m_i = res.ineqlin.marginals if hasattr(res, 'ineqlin') else []
         df_dual = pd.DataFrame({
@@ -349,20 +405,24 @@ if res.success:
     sens_targets = {
         'D6 RIN': ('rin', 'D6'),
         'D4 RIN': ('rin', 'D4'),
-        'LCFS':   ('lcfs', None),
+        'LCFS': ('lcfs', None),
         'Gasoline price': ('price','Gasoline'),
-        'Ethanol price':  ('price','Ethanol')
+        'Ethanol price': ('price','Ethanol'),
+        'Market price': ('market', None)
     }
     results=[]
     base_total = total_cost
+    base_profit = profit
     for lbl,(typ,key) in sens_targets.items():
         for shock in [-0.1,0.1]:
-            # clone inputs
-            rp = rin_prices.copy(); lp=lcfs_credit_price; fp=final_prices.copy()
+            rp = rin_prices.copy()
+            lp = lcfs_credit_price
+            fp = final_prices.copy()
+            mp = market_price
             if typ=='rin': rp[key]=rp[key]*(1+shock)
             elif typ=='lcfs': lp = lp*(1+shock)
             elif typ=='price': fp[key]=fp[key]*(1+shock)
-            # recompute eff cost only (fast) no re-optimizing full specs to keep speed? we re-run LP quickly
+            elif typ=='market': mp = mp*(1+shock)
             bs_tmp = blendstocks.copy()
             def ec2(r):
                 rinv = r['rin_yield']*rp.get(r['rin_type'],0) if r['rin_type'] else 0
@@ -375,11 +435,24 @@ if res.success:
             res2 = linprog(c=ctmp, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
             if res2.success:
                 tot2 = (res2.x*bs_tmp['effective_price'].values).sum()
-                results.append({'Param':lbl, 'Shock':f"{int(shock*100)}%", 'Total Cost':tot2, 'Δ vs Base':tot2-base_total})
+                profit2 = (mp * total_volume) - tot2
+                results.append({
+                    'Param': lbl, 
+                    'Shock': f"{int(shock*100)}%", 
+                    'Total Cost': tot2, 
+                    'Δ Cost vs Base': tot2-base_total,
+                    'Profit': profit2,
+                    'Δ Profit vs Base': profit2-base_profit
+                })
     if results:
         df_sens = pd.DataFrame(results)
         st.dataframe(df_sens)
-        bar = alt.Chart(df_sens).mark_bar().encode(x='Param:N', y='Δ vs Base:Q', color='Shock:N', tooltip=['Param','Shock','Δ vs Base','Total Cost'])
+        bar = alt.Chart(df_sens).mark_bar().encode(
+            x='Param:N', 
+            y='Δ Profit vs Base:Q', 
+            color='Shock:N', 
+            tooltip=['Param','Shock','Δ Cost vs Base','Total Cost','Δ Profit vs Base','Profit']
+        )
         st.altair_chart(bar, use_container_width=True)
 
 else:
