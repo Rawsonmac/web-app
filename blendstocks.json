@@ -1,0 +1,7 @@
+{
+  "Ethanol": {"base_price": 1.55, "rin_type": "D6", "rin_yield": 1.0, "lcfs_credits": 0.5},
+  "Biodiesel": {"base_price": 4.75, "rin_type": "D4", "rin_yield": 1.5, "lcfs_credits": 1.5},
+  "Renewable Diesel": {"base_price": 4.10, "rin_type": "D4", "rin_yield": 1.7, "lcfs_credits": 1.6},
+  "Gasoline": {"base_price": 2.60, "rin_type": null, "rin_yield": 0.0, "lcfs_credits": 0.0},
+  "ULSD": {"base_price": 3.00, "rin_type": null, "rin_yield": 0.0, "lcfs_credits": 0.0}
+}
