@@ -23,7 +23,38 @@ import altair as alt
 
 st.set_page_config(page_title="RIN / LCFS Optimizer", layout="wide")
 
-st.title("RIN-LCFS Compliance Cost Optimizer")
+# ---- Custom Red/Black Theme ----
+CUSTOM_CSS = """
+<style>
+/* Global */
+html, body, .stApp {background-color: #000000; color: #ffffff;}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {color: #cc0000 !important;}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {background-color: #111111 !important; color:#ffffff !important;}
+section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {color:#cc0000 !important;}
+
+/* Buttons */
+button[kind="primary"], .stButton>button {background-color:#cc0000 !important; color:#ffffff !important; border:1px solid #cc0000 !important;}
+button[kind="secondary"], .stDownloadButton>button {border:1px solid #cc0000 !important; color:#cc0000 !important; background:#000000 !important;}
+
+/* Dataframes */
+thead tr {background-color:#cc0000 !important; color:#ffffff !important;}
+tbody tr:nth-child(even) {background-color:#151515 !important;}
+tbody tr:nth-child(odd) {background-color:#0d0d0d !important;}
+
+/* Metrics */
+[data-testid="stMetricValue"] {color:#cc0000 !important;}
+
+/* Expander header */
+.streamlit-expanderHeader {color:#cc0000 !important;}
+</style>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+st.title("OIL BROKERAGE")
 st.markdown(
     """
     Optimize blend cost with **RIN / LCFS credits** and meet **spec constraints** (RVP, Octane, BTU, Sulfur, Aromatics, Oxygen, Benzene, CI). 
