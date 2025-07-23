@@ -1,232 +1,172 @@
+# RIN-LCFS Compliance Cost Optimizer – Streamlit App (Auto-Updating Free Data)
+
 import pandas as pd
 import numpy as np
 from scipy.optimize import linprog
 import streamlit as st
 import requests
-from requests.exceptions import RequestException
-import os
-import json
-from streamlit_echarts import st_echarts  # For pie chart
+from datetime import datetime
 
 st.title("RIN-LCFS Compliance Cost Optimizer")
 st.markdown("This tool recommends the cheapest fuel blending strategy to meet EPA RFS + LCFS compliance targets.")
 
-# EIA series IDs
-eia_series = {
-    'Gasoline': 'PET.EMM_EPMRU_PTE_NUS_DPG.W',
-    'ULSD': 'PET.EMD_EPD2D_PTE_NUS_DPG.W',
-    'Ethanol': 'PET.WEPUPUS3.W',
-    'Biodiesel': 'PET.WEBIOD3.W',
-    'Renewable Diesel': 'PET.WERDUS3.W'
+# ------------------------------
+# 🔑 CONFIG
+# ------------------------------
+API_KEY = "JM9PgqPjmuvIRmsjQkkwvqk2wcBbowMAF1RLbbhU"  # put in st.secrets["EIA_KEY"] for prod
+REFRESH_TTL_SEC = 1800  # 30 minutes cache for free data
+
+# EIA weekly series IDs ($/gal). Some don't exist -> use None and fallback price
+EIA_SERIES = {
+    "Gasoline": "PET.EMM_EPMRU_PTE_NUS_DPG.W",   # Regular retail gasoline
+    "ULSD": "PET.EMD_EPD2D_PTE_NUS_DPG.W",       # Diesel retail price
+    "Ethanol": "PET.WEPUPUS3.W",                 # U.S. ethanol FOB price
+    "Biodiesel": "PET.WEBIOD3.W",                # Biodiesel wholesale price (if 404 -> fallback)
+    "Renewable Diesel": None                       # No public EIA series => fallback
 }
 
-# Default prices
-default_prices = {
-    'Ethanol': 1.55,
-    'Biodiesel': 4.75,
-    'Renewable Diesel': 4.10,
-    'Gasoline': 2.60,
-    'ULSD': 3.00
+# Default manual prices if API fails or series missing ($/gal)
+DEFAULT_PRICES = {
+    "Ethanol": 1.55,
+    "Biodiesel": 4.75,
+    "Renewable Diesel": 4.10,
+    "Gasoline": 2.60,
+    "ULSD": 3.00
 }
 
-# Fetch live prices
-@st.cache_data(ttl=3600)
+# Static example RIN prices & LCFS (free sources are lagged; we keep manual inputs)
+DEFAULT_RIN_PRICES = {"D6": 0.83, "D4": 1.17, "D5": 1.05, "D3": 2.48}
+DEFAULT_LCFS_PRICE = 92.5  # $/MT CO2
+
+# ------------------------------
+# 🛰️ DATA FETCH HELPERS
+# ------------------------------
+@st.cache_data(ttl=REFRESH_TTL_SEC)
+def fetch_eia_price(series_id: str, api_key: str):
+    if series_id is None:
+        return None
+    url = f"https://api.eia.gov/series/?api_key={api_key}&series_id={series_id}"
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    js = r.json()
+    return float(js["series"][0]["data"][0][1])
+
+@st.cache_data(ttl=REFRESH_TTL_SEC)
 def get_live_prices():
-    rin_prices = {
-        'D6': 0.83,
-        'D4': 1.17,
-        'D5': 1.05,
-        'D3': 2.48
-    }
-    lcfs_credit_price = 92.5
-    eia_url = f"https://api.eia.gov/series/?api_key={os.getenv('EIA_API_KEY', 'JM9PgqPjmuvIRmsjQkkwvqk2wcBbowMAF1RLbbhU')}&series_id="
     prices = {}
-    
-    for name, sid in eia_series.items():
+    failures = {}
+    for name, sid in EIA_SERIES.items():
         try:
-            r = requests.get(eia_url + sid, timeout=5)
-            r.raise_for_status()
-            data = r.json().get('series', [{}])[0].get('data', [[]])[0]
-            if len(data) > 1:
-                prices[name] = round(float(data[1]), 3)
-                st.sidebar.success(f"Fetched {name} price: ${prices[name]:.3f}")
-            else:
-                raise ValueError("No data available")
-        except (RequestException, ValueError, IndexError) as e:
-            st.sidebar.warning(f"Failed to fetch {name} price: {e}. Using default.")
-            prices[name] = default_prices.get(name)
-    
-    return {
-        'rin_prices': rin_prices,
-        'lcfs_credit_price': lcfs_credit_price,
-        'blend_prices': prices
-    }
+            prices[name] = fetch_eia_price(sid, API_KEY)
+        except Exception as e:
+            prices[name] = None
+            failures[name] = str(e)
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    return prices, failures, ts
 
-# Load prices
-price_data = get_live_prices()
-rin_prices = price_data['rin_prices']
-lcfs_credit_price = price_data['lcfs_credit_price']
-blend_prices = price_data['blend_prices']
+# ------------------------------
+# 🔁 REFRESH CONTROL
+# ------------------------------
+colr1, colr2 = st.sidebar.columns([1,1])
+with colr1:
+    if st.button("↻ Refresh prices"):
+        fetch_eia_price.clear()
+        get_live_prices.clear()
+        st.experimental_rerun()
+with colr2:
+    st.write("")
 
-# Sidebar: Price overrides
-st.sidebar.header("Live Market Prices")
-st.sidebar.markdown("**RIN Prices ($/RIN):**")
+# ------------------------------
+# 📡 GET DATA
+# ------------------------------
+blend_prices, failures, fetched_at = get_live_prices()
+rin_prices = DEFAULT_RIN_PRICES.copy()
+lcfs_credit_price = DEFAULT_LCFS_PRICE
+
+# ------------------------------
+# 🧰 SIDEBAR INPUTS / INFO
+# ------------------------------
+st.sidebar.header("Live / Fallback Prices")
+st.sidebar.caption(f"Fetched: {fetched_at}  (cache {REFRESH_TTL_SEC//60} min)")
+
+st.sidebar.subheader("RIN Prices ($/RIN)")
 for k, v in rin_prices.items():
-    st.sidebar.write(f"{k}: ${v:.2f}")
-st.sidebar.write(f"**LCFS Credit Price:** ${lcfs_credit_price:.2f}/MT CO₂")
-st.sidebar.markdown("**Blendstock Prices ($/gal):**")
-for k, v in blend_prices.items():
-    if v is not None:
-        st.sidebar.write(f"{k}: ${v:.3f}")
+    rin_prices[k] = st.sidebar.number_input(f"{k} RIN", value=float(v))
+
+lcfs_credit_price = st.sidebar.number_input("LCFS Credit ($/MT CO₂)", value=float(lcfs_credit_price))
+
+st.sidebar.subheader("Blendstock Prices ($/gal)")
+final_prices = {}
+for name, default_val in DEFAULT_PRICES.items():
+    live_val = blend_prices.get(name)
+    if live_val is None:
+        label = f"{name} (fallback)"
+        final_prices[name] = st.sidebar.number_input(label, value=float(default_val))
     else:
-        st.sidebar.write(f"{k}: Not available")
+        label = f"{name} (live)"
+        final_prices[name] = st.sidebar.number_input(label, value=float(live_val))
 
-st.sidebar.subheader("Override RIN/LCFS Prices")
-rin_d6 = st.sidebar.number_input('D6 RIN Price ($/RIN)', value=rin_prices['D6'], step=0.01)
-rin_d4 = st.sidebar.number_input('D4 RIN Price ($/RIN)', value=rin_prices['D4'], step=0.01)
-rin_d5 = st.sidebar.number_input('D5 RIN Price ($/RIN)', value=rin_prices['D5'], step=0.01)
-rin_d3 = st.sidebar.number_input('D3 RIN Price ($/RIN)', value=rin_prices['D3'], step=0.01)
-lcfs_credit_price = st.sidebar.number_input('LCFS Credit Price ($/MT CO₂)', value=lcfs_credit_price, step=0.1)
-rin_prices = {'D6': rin_d6, 'D4': rin_d4, 'D5': rin_d5, 'D3': rin_d3}
+# Show any failures
+if failures:
+    with st.sidebar.expander("API Fetch Errors", expanded=False):
+        for n, msg in failures.items():
+            st.write(f"**{n}**: {msg}")
 
-# Blendstock data
-try:
-    with open('blendstocks.json', 'r') as f:
-        blendstock_data = json.load(f)
-except FileNotFoundError:
-    st.error("Error: 'blendstocks.json' not found. Please ensure the file exists in the project directory.")
-    st.stop()
-except json.JSONDecodeError:
-    st.error("Error: Invalid JSON format in 'blendstocks.json'. Please check the file content.")
-    st.stop()
+# ------------------------------
+# 🧮 USER BLEND CONSTRAINTS
+# ------------------------------
+col1, col2 = st.columns(2)
+with col1:
+    total_volume = st.number_input("Total Blend Volume (gal)", value=100_000)
+with col2:
+    min_ethanol_ratio = st.slider("Minimum Ethanol Blend (%)", min_value=0.0, max_value=1.0, value=0.10)
 
+# ------------------------------
+# 📑 BUILD BLENDSTOCK TABLE
+# ------------------------------
 blendstocks = pd.DataFrame({
-    'name': list(blendstock_data.keys()),
-    'base_price': [blend_prices.get(name, data['base_price']) for name, data in blendstock_data.items()],
-    'rin_type': [data['rin_type'] for data in blendstock_data.values()],
-    'rin_yield': [data['rin_yield'] for data in blendstock_data.values()],
-    'lcfs_credits': [data['lcfs_credits'] for data in blendstock_data.values()]
+    'name': list(DEFAULT_PRICES.keys()),
+    'base_price': [final_prices[n] for n in DEFAULT_PRICES.keys()],
+    'rin_type': ['D6', 'D4', 'D4', None, None],
+    'rin_yield': [1.0, 1.5, 1.7, 0.0, 0.0],
+    'lcfs_credits': [0.5, 1.5, 1.6, 0.0, 0.0]
 })
 
-# Blendstock selection
-st.subheader("Select Blendstocks")
-selected_blendstocks = st.multiselect("Include in Optimization", blendstocks['name'].tolist(), default=blendstocks['name'].tolist())
-blendstocks = blendstocks[blendstocks['name'].isin(selected_blendstocks)]
-
-if blendstocks.empty:
-    st.error("Please select at least one blendstock.")
-    st.stop()
-
-# Effective cost calculator
+# ------------------------------
+# 💵 EFFECTIVE COST CALC
+# ------------------------------
 def compute_effective_cost(row):
-    rin_value = 0.0
-    if row['rin_type']:
-        rin_price = rin_prices.get(row['rin_type'], 0)
-        rin_value = row['rin_yield'] * rin_price
+    rin_value = row['rin_yield'] * rin_prices.get(row['rin_type'], 0) if row['rin_type'] else 0.0
     lcfs_value = row['lcfs_credits'] * lcfs_credit_price
     return row['base_price'] - rin_value - lcfs_value
 
 blendstocks['effective_price'] = blendstocks.apply(compute_effective_cost, axis=1)
 
-# User input
-st.subheader("Input Parameters")
-st.markdown("""
-- **Total Blend Volume**: Enter the total fuel volume (in gallons) to blend.
-- **Minimum Ethanol Blend**: Specify the minimum percentage of ethanol required (e.g., 10% for E10).
-""")
-total_volume = st.number_input('Total Blend Volume (gal)', min_value=1.0, max_value=1000000.0, value=100000.0, step=1000.0)
-min_ethanol_ratio = st.slider('Minimum Ethanol Blend (%)', min_value=0.0, max_value=100.0, value=10.0, step=0.1) / 100.0
-
-if total_volume <= 0:
-    st.error("Total volume must be positive.")
-    st.stop()
-if min_ethanol_ratio > 1 or min_ethanol_ratio < 0:
-    st.error("Ethanol blend ratio must be between 0% and 100%.")
-    st.stop()
-
-# Optimization
-ethanol_constraint = np.array([1 if name == 'Ethanol' else 0 for name in blendstocks['name']])
+# ------------------------------
+# 📉 OPTIMIZATION
+# ------------------------------
 costs = blendstocks['effective_price'].values
 A_eq = [np.ones(len(costs))]
-b_eq = [total_volume]
-A_ub = [
-    -ethanol_constraint,
-    [1 if name == 'Ethanol' else 0 for name in blendstocks['name']],
-    [1 if name == 'Biodiesel' else 0 for name in blendstocks['name']]
-]
-b_ub = [
-    -total_volume * min_ethanol_ratio,
-    total_volume * 0.15,
-    total_volume * 0.20
-]
+B_eq = [total_volume]
+
+ethanol_mask = np.array([1 if n == 'Ethanol' else 0 for n in blendstocks['name']])
+A_ub = [-ethanol_mask]
+B_ub = [-total_volume * min_ethanol_ratio]
+
 bounds = [(0, total_volume) for _ in costs]
 
-# RFS constraint (example: at least 10% D6 RINs)
-if 'Ethanol' in blendstocks['name'].values:
-    d6_rin_yield = blendstocks[blendstocks['rin_type'] == 'D6']['rin_yield'].values[0]
-    A_ub.append([d6_rin_yield if name == 'Ethanol' else 0 for name in blendstocks['name']])
-    b_ub.append(total_volume * 0.10)
+result = linprog(c=costs, A_eq=A_eq, b_eq=B_eq, A_ub=[A_ub], b_ub=B_ub, bounds=bounds, method='highs')
 
-result = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
-
-# Output
+# ------------------------------
+# 📊 RESULTS
+# ------------------------------
 if result.success:
     blendstocks['blended_volume'] = result.x
     blendstocks['blended_cost'] = blendstocks['blended_volume'] * blendstocks['effective_price']
-    
-    # Format DataFrame
-    display_df = blendstocks[['name', 'base_price', 'effective_price', 'blended_volume', 'blended_cost']].copy()
-    display_df['base_price'] = display_df['base_price'].round(3)
-    display_df['effective_price'] = display_df['effective_price'].round(3)
-    display_df['blended_volume'] = display_df['blended_volume'].round(2)
-    display_df['blended_cost'] = display_df['blended_cost'].round(2)
-    
     st.subheader("Optimized Blending Strategy")
-    st.dataframe(display_df.style.format({
-        'base_price': "${:.3f}",
-        'effective_price': "${:.3f}",
-        'blended_volume': "{:,.2f} gal",
-        'blended_cost': "${:,.2f}"
-    }))
-    
-    # Summary
-    total_cost = blendstocks['blended_cost'].sum()
-    total_rins = (blendstocks['blended_volume'] * blendstocks['rin_yield']).sum()
-    total_lcfs = (blendstocks['blended_volume'] * blendstocks['lcfs_credits']).sum()
-    st.subheader("Summary")
-    st.write(f"**Total Cost:** ${total_cost:,.2f}")
-    st.write(f"**Total RINs Generated:** {total_rins:,.2f}")
-    st.write(f"**Total LCFS Credits:** {total_lcfs:,.2f} MT CO₂")
-    
-    # Pie chart
-    non_zero_volumes = blendstocks[blendstocks['blended_volume'] > 0]
-    if not non_zero_volumes.empty:
-        st.subheader("Blend Composition")
-        chart_data = {
-            "tooltip": {"trigger": "item"},
-            "legend": {"top": "5%", "left": "center"},
-            "series": [{
-                "name": "Blend Composition",
-                "type": "pie",
-                "radius": "50%",
-                "data": [
-                    {"value": vol, "name": name}
-                    for name, vol in zip(non_zero_volumes['name'], non_zero_volumes['blended_volume'])
-                ],
-                "emphasis": {
-                    "itemStyle": {
-                        "shadowBlur": 10,
-                        "shadowOffsetX": 0,
-                        "shadowColor": "rgba(0, 0, 0, 0.5)"
-                    }
-                }
-            }]
-        }
-        st_echarts(options=chart_data, height="400px")
+    st.dataframe(blendstocks[['name', 'base_price', 'effective_price', 'blended_volume', 'blended_cost']])
+    st.write(f"**Total Cost:** ${blendstocks['blended_cost'].sum():,.2f}")
 else:
-    st.error(f"Optimization failed: {result.message}. Try adjusting the total volume or ethanol ratio.")
-    st.stop()
+    st.error("Optimization failed. Adjust inputs and try again.")
 
-# Reset button
-if st.button("Reset Inputs"):
-    st.rerun()
+st.caption("If a price couldn't be fetched from EIA, a fallback manual input is used. Click 'Refresh prices' to pull fresh data.")
