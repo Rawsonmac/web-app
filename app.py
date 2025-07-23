@@ -115,7 +115,7 @@ for n,dv in DEFAULT_PRICES.items():
 
 if failures:
     with st.sidebar.expander("API errors"):
-        for n,m in failures.items(): st.write(f"**{n}**: {m})
+        for n,m in failures.items(): st.write(f"**{n}**: {m}")
 
 # Debug toggle
 st.sidebar.subheader("Debug Options")
