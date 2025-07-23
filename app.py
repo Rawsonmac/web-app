@@ -38,17 +38,17 @@ DEFAULT_PRICES = {
     "ULSD": 3.00
 }
 
-# Physical/Regulatory properties (rough averages) per gallon
+# Physical/Regulatory properties (updated with recent data)
 DEFAULT_PROPS = pd.DataFrame({
-    'name': ["Ethanol","Biodiesel","Renewable Diesel","Gasoline","ULSD"],
-    'rvp':  [18.0,0.0,0.0,9.0,0.0],
-    'octane':[113.0,0.0,0.0,87.0,0.0],
-    'btu':  [76.0,118.0,120.0,114.0,128.0],
-    'sulfur_ppm':[0,10,10,30,15],
-    'arom_pct':[0,0,0,25,0],
-    'oxy_pct':[34,0,0,0,0],
-    'benz_pct':[0,0,0,1.0,0],
-    'ci_gmj': [60,40,30,93,94]  # gCO2e/MJ; illustrative
+    'name': ["Ethanol", "Biodiesel", "Renewable Diesel", "Gasoline", "ULSD"],
+    'rvp': [18.0, 0.0, 0.0, 9.0, 0.0],
+    'octane': [113.0, 0.0, 0.0, 87.0, 0.0],
+    'btu': [76.0, 118.0, 120.0, 114.0, 128.0],
+    'sulfur_ppm': [0.0, 15.0, 10.0, 20.0, 15.0],
+    'arom_pct': [0.0, 0.0, 5.0, 22.5, 15.0],
+    'oxy_pct': [34.7, 11.0, 0.0, 3.7, 0.0],
+    'benz_pct': [0.0, 0.0, 0.0, 0.6, 0.0],
+    'ci_gmj': [60.0, 40.0, 30.0, 93.0, 94.0]
 })
 
 DEFAULT_RIN_PRICES = {"D6":0.83,"D4":1.17,"D5":1.05,"D3":2.48}
@@ -172,6 +172,22 @@ with mo2:
     weight_ci = st.slider("Weight CI (0=ignore,1=only CI)", 0.0,1.0,0.3,disabled=(obj_mode=="Min Cost"))
 
 # ------------------------------
+# DISPLAY FEEDSTOCK PROPERTIES
+# ------------------------------
+st.subheader("Feedstock Properties")
+props_display = DEFAULT_PROPS[['name', 'rvp', 'octane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].rename(columns={
+    'name': 'Component', 'rvp': 'RVP (psi)', 'octane': 'Octane', 'btu': 'BTU (k/gal)',
+    'sulfur_ppm': 'Sulfur (ppm)', 'arom_pct': 'Aromatics (%)', 'oxy_pct': 'Oxygen (%)',
+    'benz_pct': 'Benzene (%)', 'ci_gmj': 'CI (gCO₂e/MJ)'
+})
+st.dataframe(props_display)
+
+# Validate feedstock properties
+missing_props = DEFAULT_PROPS[['rvp', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct']].isnull().any()
+if missing_props.any():
+    st.warning("Missing properties detected in feedstock data. Please ensure all values for RVP, sulfur, aromatics, oxygen, and benzene are provided.")
+
+# ------------------------------
 # BUILD TABLE
 # ------------------------------
 blendstocks = pd.DataFrame({
@@ -182,6 +198,10 @@ blendstocks = pd.DataFrame({
     'lcfs_credits':[0.5,1.5,1.6,0.0,0.0]
 })
 blendstocks = blendstocks.merge(DEFAULT_PROPS, on='name', how='left')
+
+# Check for merge issues
+if blendstocks[['rvp', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct']].isnull().any().any():
+    st.error("Merge failed: Some blendstocks lack properties. Ensure all blendstocks in DEFAULT_PRICES have corresponding entries in DEFAULT_PROPS.")
 
 # Effective cost
 def eff_cost(r):
@@ -283,11 +303,20 @@ if res.success:
     avg_cost = total_cost/tot
 
     ethanol_vol = blendstocks.loc[blendstocks['name']=='Ethanol','blended_volume'].iloc[0]
-    # actual specs
     def vavg(col):
         return float((blendstocks[col]*blendstocks['blended_volume']).sum()/tot)
     act_rvp = vavg('rvp'); act_oct=vavg('octane'); act_btu=vavg('btu')
     act_sul=vavg('sulfur_ppm'); act_ar=vavg('arom_pct'); act_oxy=vavg('oxy_pct'); act_bz=vavg('benz_pct'); act_ci=vavg('ci_gmj')
+
+    # Diagnostic: Feasible property ranges
+    st.subheader("Feasible Property Ranges")
+    props = ['rvp', 'octane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']
+    ranges = {}
+    for prop in props:
+        min_val = (blendstocks[prop] * [b[0]/tot for b in bounds]).sum()
+        max_val = (blendstocks[prop] * [b[1]/tot for b in bounds]).sum()
+        ranges[prop] = (min_val, max_val)
+    st.write(pd.DataFrame(ranges, index=['Min', 'Max']).T)
 
     # cards
     c1,c2,c3,c4 = st.columns(4)
@@ -298,13 +327,13 @@ if res.success:
 
     st.caption(f"Specs -> Sulfur {act_sul:.1f} ppm | Arom {act_ar:.1f}% | Oxy {act_oxy:.1f}% | Benz {act_bz:.2f}% | CI {act_ci:.1f} g/MJ")
 
-    # ------------------------------
-    # PROFIT CALCULATION
-    # ------------------------------
+    # Profit calculation
     st.subheader("Expected Profit")
     revenue = market_price * total_volume
     profit = revenue - total_cost
     profit_per_gal = profit / total_volume if total_volume else 0
+    if profit < 0:
+        st.warning("Profit is negative. Consider increasing market price or relaxing constraints.")
 
     c1, c2 = st.columns(2)
     c1.metric("Total Profit", f"${profit:,.2f}")
@@ -313,15 +342,15 @@ if res.success:
     view_cols=['name','base_price','effective_price','rvp','octane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
     nice = blendstocks[view_cols].rename(columns={
         'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','btu':'BTU',
-        'sulfur_ppm':'Sulfur ppm','arom_pct':'Arom %','oxy_pct':'Oxygen %','benz_pct':'Benz %',
-        'ci_gmj':'CI g/MJ','blended_volume':'Gallons','blended_cost':'Total $'
+        'sulfur_ppm':'Sulfur (ppm)','arom_pct':'Aromatics (%)','oxy_pct':'Oxygen (%)','benz_pct':'Benzene (%)',
+        'ci_gmj':'CI (gCO₂e/MJ)','blended_volume':'Gallons','blended_cost':'Total $'
     })
 
     # Add summary row for totals and profit
     summary = pd.DataFrame({
         'Component': ['Total'],
-        'Base $/gal': [''], 'Net $/gal': [avg_cost], 'RVP': [act_rvp], 'Octane': [act_oct], 'BTU': [act_btu],
-        'Sulfur ppm': [act_sul], 'Arom %': [act_ar], 'Oxygen %': [act_oxy], 'Benz %': [act_bz], 'CI g/MJ': [act_ci],
+        'Base $/gal': [''], 'Net $/gal': [avg_cost], 'RVP (psi)': [act_rvp], 'Octane': [act_oct], 'BTU': [act_btu],
+        'Sulfur (ppm)': [act_sul], 'Aromatics (%)': [act_ar], 'Oxygen (%)': [act_oxy], 'Benzene (%)': [act_bz], 'CI (gCO₂e/MJ)': [act_ci],
         'Gallons': [total_volume], 'Total $': [total_cost], 'Revenue $': [revenue], 'Profit $': [profit]
     })
     nice = pd.concat([nice, summary], ignore_index=True)
@@ -429,6 +458,6 @@ if res.success:
         st.altair_chart(bar, use_container_width=True)
 
 else:
-    st.error("Optimization failed. Relax constraints or adjust bounds.")
+    st.error(f"Optimization failed: {res.message}. Relax constraints, adjust component bounds, or add blendstocks with suitable properties.")
 
 st.caption("Non-linear RVP uses log-sum approximation. For exact thermodynamic mixing, switch to a nonlinear solver.")
