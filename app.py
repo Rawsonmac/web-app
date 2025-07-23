@@ -351,41 +351,14 @@ if res.success:
             'Category': ['Revenue', 'Total Cost', 'Profit'],
             'Value': [revenue, total_cost, profit]
         })
-        ```chartjs
-        {
-            "type": "pie",
-            "data": {
-                "labels": ["Revenue", "Total Cost", "Profit"],
-                "datasets": [{
-                    "data": [revenue, total_cost, profit],
-                    "backgroundColor": ["#36A2EB", "#FF6384", "#4CAF50"],
-                    "borderColor": ["#FFFFFF", "#FFFFFF", "#FFFFFF"],
-                    "borderWidth": 1
-                }]
-            },
-            "options": {
-                "responsive": true,
-                "plugins": {
-                    "legend": {
-                        "position": "top",
-                        "labels": { "color": "#000000" }
-                    },
-                    "title": {
-                        "display": true,
-                        "text": "Profit Breakdown",
-                        "color": "#000000"
-                    },
-                    "tooltip": {
-                        "callbacks": {
-                            "label": function(context) {
-                                return context.label + ': $' + context.parsed.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        ```
+        profit_chart = alt.Chart(profit_data).mark_arc().encode(
+            theta=alt.Theta("Value:Q", title="Amount ($)"),
+            color=alt.Color("Category:N", scale=alt.Scale(range=["#36A2EB", "#FF6384", "#4CAF50"])),
+            tooltip=["Category", alt.Tooltip("Value:Q", format="$,.2f")]
+        ).properties(
+            title="Profit Breakdown"
+        )
+        st.altair_chart(profit_chart, use_container_width=True)
 
     # Shadow prices / duals
     st.subheader("Constraint Shadow Prices (marginals)")
