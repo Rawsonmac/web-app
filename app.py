@@ -164,4 +164,69 @@ bounds = [(0, total_volume) for _ in costs]
 # RFS constraint (example: at least 10% D6 RINs)
 if 'Ethanol' in blendstocks['name'].values:
     d6_rin_yield = blendstocks[blendstocks['rin_type'] == 'D6']['rin_yield'].values[0]
-    A_ub.append([d6_rin_yield if name == 'Ethanol' else 0 for name in blendstocks['name
+    A_ub.append([d6_rin_yield if name == 'Ethanol' else 0 for name in blendstocks['name']])
+    b_ub.append(total_volume * 0.10)
+
+result = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
+
+# Output
+if result.success:
+    blendstocks['blended_volume'] = result.x
+    blendstocks['blended_cost'] = blendstocks['blended_volume'] * blendstocks['effective_price']
+    
+    # Format DataFrame
+    display_df = blendstocks[['name', 'base_price', 'effective_price', 'blended_volume', 'blended_cost']].copy()
+    display_df['base_price'] = display_df['base_price'].round(3)
+    display_df['effective_price'] = display_df['effective_price'].round(3)
+    display_df['blended_volume'] = display_df['blended_volume'].round(2)
+    display_df['blended_cost'] = display_df['blended_cost'].round(2)
+    
+    st.subheader("Optimized Blending Strategy")
+    st.dataframe(display_df.style.format({
+        'base_price': "${:.3f}",
+        'effective_price': "${:.3f}",
+        'blended_volume': "{:,.2f} gal",
+        'blended_cost': "${:,.2f}"
+    }))
+    
+    # Summary
+    total_cost = blendstocks['blended_cost'].sum()
+    total_rins = (blendstocks['blended_volume'] * blendstocks['rin_yield']).sum()
+    total_lcfs = (blendstocks['blended_volume'] * blendstocks['lcfs_credits']).sum()
+    st.subheader("Summary")
+    st.write(f"**Total Cost:** ${total_cost:,.2f}")
+    st.write(f"**Total RINs Generated:** {total_rins:,.2f}")
+    st.write(f"**Total LCFS Credits:** {total_lcfs:,.2f} MT CO₂")
+    
+    # Pie chart
+    non_zero_volumes = blendstocks[blendstocks['blended_volume'] > 0]
+    if not non_zero_volumes.empty:
+        st.subheader("Blend Composition")
+        chart_data = {
+            "tooltip": {"trigger": "item"},
+            "legend": {"top": "5%", "left": "center"},
+            "series": [{
+                "name": "Blend Composition",
+                "type": "pie",
+                "radius": "50%",
+                "data": [
+                    {"value": vol, "name": name}
+                    for name, vol in zip(non_zero_volumes['name'], non_zero_volumes['blended_volume'])
+                ],
+                "emphasis": {
+                    "itemStyle": {
+                        "shadowBlur": 10,
+                        "shadowOffsetX": 0,
+                        "shadowColor": "rgba(0, 0, 0, 0.5)"
+                    }
+                }
+            }]
+        }
+        st_echarts(options=chart_data, height="400px")
+else:
+    st.error(f"Optimization failed: {result.message}. Try adjusting the total volume or ethanol ratio.")
+    st.stop()
+
+# Reset button
+if st.button("Reset Inputs"):
+    st.rerun()
