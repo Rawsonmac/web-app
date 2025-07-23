@@ -1,4 +1,4 @@
-# RIN-LCFS Compliance Cost Optimizer – Streamlit App (Auto-Updating Free Data)
+# RIN-LCFS Compliance Cost Optimizer – Streamlit App (Auto-Updating Free Data + UX Improvements)
 
 import pandas as pd
 import numpy as np
@@ -6,26 +6,32 @@ from scipy.optimize import linprog
 import streamlit as st
 import requests
 from datetime import datetime
+import altair as alt
+
+st.set_page_config(page_title="RIN / LCFS Optimizer", layout="wide")
 
 st.title("RIN-LCFS Compliance Cost Optimizer")
-st.markdown("This tool recommends the cheapest fuel blending strategy to meet EPA RFS + LCFS compliance targets.")
+st.markdown(
+    """
+    Find the **cheapest blend** (Ethanol, Biodiesel, Renewable Diesel, Gasoline, ULSD) that meets your compliance constraints (RINs / LCFS / ethanol %).
+    Prices auto-pull from **EIA** where available; everything else can be overridden.
+    """
+)
 
 # ------------------------------
 # 🔑 CONFIG
 # ------------------------------
-API_KEY = "JM9PgqPjmuvIRmsjQkkwvqk2wcBbowMAF1RLbbhU"  # put in st.secrets["EIA_KEY"] for prod
-REFRESH_TTL_SEC = 1800  # 30 minutes cache for free data
+API_KEY = "JM9PgqPjmuvIRmsjQkkwvqk2wcBbowMAF1RLbbhU"  # move to st.secrets["EIA_KEY"] in prod
+REFRESH_TTL_SEC = 1800  # 30 min cache
 
-# EIA weekly series IDs ($/gal). Some don't exist -> use None and fallback price
 EIA_SERIES = {
     "Gasoline": "PET.EMM_EPMRU_PTE_NUS_DPG.W",   # Regular retail gasoline
     "ULSD": "PET.EMD_EPD2D_PTE_NUS_DPG.W",       # Diesel retail price
-    "Ethanol": "PET.WEPUPUS3.W",                 # U.S. ethanol FOB price
-    "Biodiesel": "PET.WEBIOD3.W",                # Biodiesel wholesale price (if 404 -> fallback)
-    "Renewable Diesel": None                       # No public EIA series => fallback
+    "Ethanol": "PET.WEPUPUS3.W",                 # Ethanol FOB
+    "Biodiesel": "PET.WEBIOD3.W",                # Biodiesel wholesale (if 404 -> fallback)
+    "Renewable Diesel": None                      # No public series -> fallback
 }
 
-# Default manual prices if API fails or series missing ($/gal)
 DEFAULT_PRICES = {
     "Ethanol": 1.55,
     "Biodiesel": 4.75,
@@ -34,7 +40,6 @@ DEFAULT_PRICES = {
     "ULSD": 3.00
 }
 
-# Static example RIN prices & LCFS (free sources are lagged; we keep manual inputs)
 DEFAULT_RIN_PRICES = {"D6": 0.83, "D4": 1.17, "D5": 1.05, "D3": 2.48}
 DEFAULT_LCFS_PRICE = 92.5  # $/MT CO2
 
@@ -67,12 +72,11 @@ def get_live_prices():
 # ------------------------------
 # 🔁 REFRESH CONTROL
 # ------------------------------
+st.sidebar.header("Data & Inputs")
 colr1, colr2 = st.sidebar.columns([1,1])
 with colr1:
     if st.button("↻ Refresh prices"):
-        fetch_eia_price.clear()
-        get_live_prices.clear()
-        st.experimental_rerun()
+        fetch_eia_price.clear(); get_live_prices.clear(); st.experimental_rerun()
 with colr2:
     st.write("")
 
@@ -83,12 +87,11 @@ blend_prices, failures, fetched_at = get_live_prices()
 rin_prices = DEFAULT_RIN_PRICES.copy()
 lcfs_credit_price = DEFAULT_LCFS_PRICE
 
-# ------------------------------
-# 🧰 SIDEBAR INPUTS / INFO
-# ------------------------------
-st.sidebar.header("Live / Fallback Prices")
 st.sidebar.caption(f"Fetched: {fetched_at}  (cache {REFRESH_TTL_SEC//60} min)")
 
+# ------------------------------
+# 🧰 PRICE INPUTS
+# ------------------------------
 st.sidebar.subheader("RIN Prices ($/RIN)")
 for k, v in rin_prices.items():
     rin_prices[k] = st.sidebar.number_input(f"{k} RIN", value=float(v))
@@ -99,14 +102,9 @@ st.sidebar.subheader("Blendstock Prices ($/gal)")
 final_prices = {}
 for name, default_val in DEFAULT_PRICES.items():
     live_val = blend_prices.get(name)
-    if live_val is None:
-        label = f"{name} (fallback)"
-        final_prices[name] = st.sidebar.number_input(label, value=float(default_val))
-    else:
-        label = f"{name} (live)"
-        final_prices[name] = st.sidebar.number_input(label, value=float(live_val))
+    tag = "live" if live_val is not None else "fallback"
+    final_prices[name] = st.sidebar.number_input(f"{name} ({tag})", value=float(live_val or default_val))
 
-# Show any failures
 if failures:
     with st.sidebar.expander("API Fetch Errors", expanded=False):
         for n, msg in failures.items():
@@ -115,11 +113,13 @@ if failures:
 # ------------------------------
 # 🧮 USER BLEND CONSTRAINTS
 # ------------------------------
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
-    total_volume = st.number_input("Total Blend Volume (gal)", value=100_000)
+    total_volume = st.number_input("Total Blend Volume (gal)", value=100_000, min_value=0)
 with col2:
-    min_ethanol_ratio = st.slider("Minimum Ethanol Blend (%)", min_value=0.0, max_value=1.0, value=0.10)
+    min_ethanol_ratio = st.slider("Min Ethanol %", min_value=0.0, max_value=1.0, value=0.10)
+with col3:
+    show_charts = st.checkbox("Show charts", value=True)
 
 # ------------------------------
 # 📑 BUILD BLENDSTOCK TABLE
@@ -132,9 +132,7 @@ blendstocks = pd.DataFrame({
     'lcfs_credits': [0.5, 1.5, 1.6, 0.0, 0.0]
 })
 
-# ------------------------------
-# 💵 EFFECTIVE COST CALC
-# ------------------------------
+# Effective cost
 def compute_effective_cost(row):
     rin_value = row['rin_yield'] * rin_prices.get(row['rin_type'], 0) if row['rin_type'] else 0.0
     lcfs_value = row['lcfs_credits'] * lcfs_credit_price
@@ -145,34 +143,87 @@ blendstocks['effective_price'] = blendstocks.apply(compute_effective_cost, axis=
 # ------------------------------
 # 📉 OPTIMIZATION
 # ------------------------------
-# Clean/validate data for linprog
 costs = blendstocks['effective_price'].astype(float).values
 n = len(costs)
 
-# Equality: sum of all volumes = total_volume
 A_eq = np.ones((1, n))
 b_eq = np.array([float(total_volume)])
 
-# Inequality: Ethanol volume >= min_ethanol_ratio * total_volume  →  -Ethanol_vol <= -min_required
 ethanol_mask = (blendstocks['name'] == 'Ethanol').astype(int).values
 A_ub = (-ethanol_mask).reshape(1, n)
 b_ub = np.array([-float(total_volume) * float(min_ethanol_ratio)])
 
-# Bounds for each variable (0 to total_volume)
 bounds = [(0.0, float(total_volume)) for _ in range(n)]
 
-# Run LP
 result = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
 
 # ------------------------------
-# 📊 RESULTS
+# 📊 RESULTS + UX IMPROVEMENTS
 # ------------------------------
 if result.success:
     blendstocks['blended_volume'] = result.x
     blendstocks['blended_cost'] = blendstocks['blended_volume'] * blendstocks['effective_price']
+    total_cost = blendstocks['blended_cost'].sum()
+    avg_cost = total_cost / total_volume if total_volume else 0
+    ethanol_vol = blendstocks.loc[blendstocks['name']=='Ethanol','blended_volume'].iloc[0]
+
+    # --- Summary Cards ---
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Cost", f"${total_cost:,.2f}")
+    c2.metric("Avg Net Cost $/gal", f"${avg_cost:,.3f}")
+    c3.metric("Ethanol Vol (gal)", f"{ethanol_vol:,.0f}")
+
     st.subheader("Optimized Blending Strategy")
-    st.dataframe(blendstocks[['name', 'base_price', 'effective_price', 'blended_volume', 'blended_cost']])
-    st.write(f"**Total Cost:** ${blendstocks['blended_cost'].sum():,.2f}")
+    view_cols = ['name', 'base_price', 'effective_price', 'blended_volume', 'blended_cost']
+    st.dataframe(blendstocks[view_cols].rename(columns={
+        'name':'Component', 'base_price':'Base $/gal', 'effective_price':'Net $/gal',
+        'blended_volume':'Gallons to Use', 'blended_cost':'Total $'
+    }))
+
+    # Download CSV
+    csv = blendstocks[view_cols].to_csv(index=False)
+    st.download_button("Download results as CSV", csv, file_name="blend_optimization.csv", mime="text/csv")
+
+    # Charts
+    if show_charts:
+        vol_chart = alt.Chart(blendstocks).mark_arc().encode(
+            theta=alt.Theta(field="blended_volume", type="quantitative"),
+            color=alt.Color(field="name", type="nominal"),
+            tooltip=["name", "blended_volume"]
+        ).properties(title="Blend Volume Share")
+
+        price_chart = alt.Chart(blendstocks).mark_bar().encode(
+            x=alt.X('name:N', title='Component'),
+            y=alt.Y('effective_price:Q', title='Net $/gal'),
+            tooltip=['name','effective_price']
+        ).properties(title="Net Cost per Gallon")
+
+        st.altair_chart(vol_chart, use_container_width=True)
+        st.altair_chart(price_chart, use_container_width=True)
+
+    # --- Scenario Saver ---
+    if 'scenarios' not in st.session_state:
+        st.session_state['scenarios'] = []
+
+    if st.button("📌 Save this scenario"):
+        st.session_state['scenarios'].append({
+            'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            'total_cost': total_cost,
+            'avg_cost': avg_cost,
+            'ethanol_ratio': ethanol_vol/total_volume if total_volume else 0,
+            'table': blendstocks[view_cols].copy()
+        })
+        st.success("Scenario saved. Check below.")
+
+    if st.session_state['scenarios']:
+        st.subheader("Saved Scenarios (compare)")
+        for i, sc in enumerate(st.session_state['scenarios']):
+            with st.expander(f"Scenario {i+1} – {sc['timestamp']}"):
+                st.write(f"Total Cost: ${sc['total_cost']:,.2f} | Avg $/gal: ${sc['avg_cost']:,.3f} | Ethanol %: {sc['ethanol_ratio']*100:.1f}%")
+                st.dataframe(sc['table'].rename(columns={
+                    'name':'Component', 'base_price':'Base $/gal', 'effective_price':'Net $/gal',
+                    'blended_volume':'Gallons to Use', 'blended_cost':'Total $'
+                }))
 else:
     st.error("Optimization failed. Adjust inputs and try again.")
 
