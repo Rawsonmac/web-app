@@ -115,7 +115,11 @@ for n,dv in DEFAULT_PRICES.items():
 
 if failures:
     with st.sidebar.expander("API errors"):
-        for n,m in failures.items(): st.write(f"**{n}**: {m}")
+        for n,m in failures.items(): st.write(f"**{n}**: {m})
+
+# Debug toggle
+st.sidebar.subheader("Debug Options")
+show_debug = st.sidebar.checkbox("Show diagnostic messages", value=False)
 
 # ------------------------------
 # MAIN INPUTS
@@ -160,12 +164,21 @@ props_display = props_display.round(2).astype(str).replace('0.0', '0.00')
 st.dataframe(props_display)
 
 # Validate feedstock properties
+if 'diagnostics' not in st.session_state:
+    st.session_state.diagnostics = []
+
 missing_props = DEFAULT_PROPS[['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].isnull().any()
 zero_props = DEFAULT_PROPS[['rvp', 'octane', 'cetane', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].eq(0).any()
 if missing_props.any():
-    st.warning(f"Missing properties detected: {', '.join(missing_props[missing_props].index)}. Ensure all values are provided in DEFAULT_PROPS.")
+    msg = f"Missing properties detected: {', '.join(missing_props[missing_props].index)}. Ensure all values are provided in DEFAULT_PROPS."
+    st.session_state.diagnostics.append(msg)
+    if show_debug:
+        st.warning(msg)
 if zero_props.any():
-    st.info(f"Zero values detected for: {', '.join(zero_props[zero_props].index)}. This is expected for octane (diesel blendstocks) and cetane (gasoline blendstocks). Verify other zeros are intentional.")
+    msg = f"Zero values detected for: {', '.join(zero_props[zero_props].index)}. This is expected for octane (diesel blendstocks) and cetane (gasoline blendstocks). Verify other zeros are intentional."
+    st.session_state.diagnostics.append(msg)
+    if show_debug:
+        st.info(msg)
 
 # ------------------------------
 # BUILD TABLE
@@ -181,7 +194,10 @@ blendstocks = blendstocks.merge(DEFAULT_PROPS, on='name', how='left')
 
 # Check for merge issues
 if blendstocks[['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].isnull().any().any():
-    st.error("Merge failed: Some blendstocks lack properties. Ensure all blendstocks in DEFAULT_PRICES have corresponding entries in DEFAULT_PROPS.")
+    msg = "Merge failed: Some blendstocks lack properties. Ensure all blendstocks in DEFAULT_PRICES have corresponding entries in DEFAULT_PROPS."
+    st.session_state.diagnostics.append(msg)
+    if show_debug:
+        st.error(msg)
     st.write("Blendstocks DataFrame (debug):", blendstocks)
 
 # Effective cost
@@ -217,9 +233,12 @@ max_benz = max(max_benz, (blendstocks['benz_pct'] * [b[1]/total_volume for b in 
 max_ci = max(max_ci, (blendstocks['ci_gmj'] * [b[1]/total_volume for b in bounds]).sum()) if enable_ci else float('inf')
 min_btu = min(min_btu, (blendstocks['btu'] * [b[0]/total_volume for b in bounds]).sum()) if enable_btu else 0.0
 
-# Display adjusted constraints
+# Store adjusted constraints in session state
 if any([enable_rvp, enable_sulfur, enable_btu, enable_ci, enable_arom, enable_oxy, enable_benz]):
-    st.info(f"Adjusted constraints: min_ethanol_ratio={min_ethanol_ratio:.2f}, max_rvp={max_rvp:.2f}, max_sul={max_sul:.2f}, max_arom={max_arom:.2f}, max_oxy={max_oxy:.2f}, max_benz={max_benz:.2f}, max_ci={max_ci:.2f}, min_btu={min_btu:.2f}")
+    msg = f"Adjusted constraints: min_ethanol_ratio={min_ethanol_ratio:.2f}, max_rvp={max_rvp:.2f}, max_sul={max_sul:.2f}, max_arom={max_arom:.2f}, max_oxy={max_oxy:.2f}, max_benz={max_benz:.2f}, max_ci={max_ci:.2f}, min_btu={min_btu:.2f}"
+    st.session_state.diagnostics.append(msg)
+    if show_debug:
+        st.info(msg)
 
 # Inequalities
 A_ub_list = []
