@@ -123,8 +123,8 @@ st.sidebar.subheader("Component Min/Max %")
 comp_bounds = {}
 for comp in DEFAULT_PRICES.keys():
     with st.sidebar.expander(comp, expanded=False):
-        mn = st.number_input(f"{comp} min %", 0.0, 1.0, 0.0, key=f"mn_{comp}")
-        mx = st.number_input(f"{comp} max %", 0.0, 1.0, 1.0, key=f"mx_{comp}")
+        mn = st.number_input(f"{comp} min %", value=0.0, min_value=0.0, max_value=1.0, key=f"mn_{comp}")
+        mx = st.number_input(f"{comp} max %", value=1.0, min_value=0.0, max_value=1.0, key=f"mx_{comp}")
         comp_bounds[comp]=(mn,mx)
 
 if failures:
@@ -136,7 +136,7 @@ if failures:
 # ------------------------------
 col1,col2,col3 = st.columns(3)
 with col1:
-    total_volume = st.number_input("Total Volume (gal)", 100_000, min_value=0)
+    total_volume = st.number_input("Total Volume (gal)", value=100_000, min_value=0)
 with col2:
     min_ethanol_ratio = st.slider("Min Ethanol %", 0.0, 1.0, 0.10)
 with col3:
@@ -147,27 +147,27 @@ s1,s2,s3 = st.columns(3)
 with s1:
     enable_rvp_nl = st.checkbox("Use non-linear RVP", value=False)
     enable_rvp = st.checkbox("Max RVP", value=False)
-    max_rvp = st.number_input("Max RVP (psi)", 9.0, 0.0, disabled=not enable_rvp)
+    max_rvp = st.number_input("Max RVP (psi)", value=9.0, min_value=0.0, disabled=not enable_rvp)
 with s2:
     enable_oct = st.checkbox("Min Octane", value=False)
-    min_oct = st.number_input("Min Octane", 87.0, 0.0, disabled=not enable_oct)
+    min_oct = st.number_input("Min Octane", value=87.0, min_value=0.0, disabled=not enable_oct)
     enable_sulfur = st.checkbox("Max Sulfur (ppm)", value=False)
-    max_sul = st.number_input("Max Sulfur", 30.0, 0.0, disabled=not enable_sulfur)
+    max_sul = st.number_input("Max Sulfur", value=30.0, min_value=0.0, disabled=not enable_sulfur)
 with s3:
     enable_btu = st.checkbox("Min BTU (k/gal)", value=False)
-    min_btu = st.number_input("Min BTU", 110.0, 0.0, disabled=not enable_btu)
+    min_btu = st.number_input("Min BTU", value=110.0, min_value=0.0, disabled=not enable_btu)
     enable_ci = st.checkbox("Max CI (gCO₂e/MJ)", value=False)
-    max_ci = st.number_input("Max CI", 90.0, 0.0, disabled=not enable_ci)
+    max_ci = st.number_input("Max CI", value=90.0, min_value=0.0, disabled=not enable_ci)
 
 s4,s5 = st.columns(2)
 with s4:
     enable_arom = st.checkbox("Max Aromatics %", value=False)
-    max_arom = st.number_input("Max Arom %", 25.0, 0.0, disabled=not enable_arom)
+    max_arom = st.number_input("Max Arom %", value=25.0, min_value=0.0, disabled=not enable_arom)
     enable_benz = st.checkbox("Max Benzene %", value=False)
-    max_benz = st.number_input("Max Benzene %", 1.0, 0.0, disabled=not enable_benz)
+    max_benz = st.number_input("Max Benzene %", value=1.0, min_value=0.0, disabled=not enable_benz)
 with s5:
     enable_oxy = st.checkbox("Max Oxygen %", value=False)
-    max_oxy = st.number_input("Max Oxygen %", 10.0, 0.0, disabled=not enable_oxy)
+    max_oxy = st.number_input("Max Oxygen %", value=10.0, min_value=0.0, disabled=not enable_oxy)
 
 st.markdown("### Objective Mode")
 mo1, mo2 = st.columns([2,1])
