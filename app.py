@@ -322,7 +322,11 @@ if res.success:
 
     if show_charts:
         vol_chart = alt.Chart(nice).mark_arc().encode(theta=alt.Theta("Gallons:Q"), color="Component:N", tooltip=["Component","Gallons"])
-        price_chart = alt.Chart(nice).mark_bar().encode(x="Component:N", y="Net $/gal:Q", tooltip=["Component","Net $/gal"])
+        price_chart = alt.Chart(nice).mark_bar(size=40).encode(
+    x=alt.X("Component:N", axis=alt.Axis(labelAngle=-15)),
+    y=alt.Y("Net $/gal:Q", title="Net $/gal"),
+    tooltip=["Component", "Net $/gal"]
+).properties(height=300)
         st.altair_chart(vol_chart, use_container_width=True)
         st.altair_chart(price_chart, use_container_width=True)
 
