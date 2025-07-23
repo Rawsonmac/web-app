@@ -39,7 +39,7 @@ def get_live_prices():
         'D3': 2.48
     }
     lcfs_credit_price = 92.5
-    eia_url = f"https://api.eia.gov/series/?api_key={os.getenv('EIA_API_KEY', 'YOUR_EIA_API_KEY')}&series_id="
+    eia_url = f"https://api.eia.gov/series/?api_key={os.getenv('EIA_API_KEY', 'JM9PgqPjmuvIRmsjQkkwvqk2wcBbowMAF1RLbbhU')}&series_id="
     prices = {}
     
     for name, sid in eia_series.items():
