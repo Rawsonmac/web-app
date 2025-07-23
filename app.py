@@ -100,7 +100,8 @@ def get_live_prices():
 # ------------------------------
 st.sidebar.header("Data & Inputs")
 if st.sidebar.button("↻ Refresh prices"):
-    fetch_eia_price.clear(); get_live_prices.clear(); st.experimental_rerun()
+    st.cache_data.clear()
+    st.experimental_rerun()
 
 blend_prices, failures, fetched_at = get_live_prices()
 rin_prices = DEFAULT_RIN_PRICES.copy()
