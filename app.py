@@ -88,15 +88,12 @@ rin_d3 = st.sidebar.number_input('D3 RIN Price ($/RIN)', value=rin_prices['D3'],
 lcfs_credit_price = st.sidebar.number_input('LCFS Credit Price ($/MT CO₂)', value=lcfs_credit_price, step=0.1)
 rin_prices = {'D6': rin_d6, 'D4': rin_d4, 'D5': rin_d5, 'D3': rin_d3}
 
-# Blendstock data
-blendstock_data = {
-    "Ethanol": {"base_price": 1.55, "rin_type": "D6", "rin_yield": 1.0, "lcfs_credits": 0.5},
-    "Biodiesel": {"base_price": 4.75, "rin_type": "D4", "rin_yield": 1.5, "lcfs_credits": 1.5},
-    "Renewable Diesel": {"base_price": 4.10, "rin_type": "D4", "rin_yield": 1.7, "lcfs_credits": 1.6},
-    "Gasoline": {"base_price": 2.60, "rin_type": None, "rin_yield": 0.0, "lcfs_credits": 0.0},
-    "ULSD": {"base_price": 3.00, "rin_type": None, "rin_yield": 0.0, "lcfs_credits": 0.0}
-}
+import json
 
+with open('blendstocks.json', 'r') as f:
+    blendstock_data = json.load(f)
+
+    
 blendstocks = pd.DataFrame({
     'name': list(blendstock_data.keys()),
     'base_price': [blend_prices.get(name, data['base_price']) for name, data in blendstock_data.items()],
