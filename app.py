@@ -145,17 +145,24 @@ blendstocks['effective_price'] = blendstocks.apply(compute_effective_cost, axis=
 # ------------------------------
 # 📉 OPTIMIZATION
 # ------------------------------
-costs = blendstocks['effective_price'].values
-A_eq = [np.ones(len(costs))]
-B_eq = [total_volume]
+# Clean/validate data for linprog
+costs = blendstocks['effective_price'].astype(float).values
+n = len(costs)
 
-ethanol_mask = np.array([1 if n == 'Ethanol' else 0 for n in blendstocks['name']])
-A_ub = [-ethanol_mask]
-B_ub = [-total_volume * min_ethanol_ratio]
+# Equality: sum of all volumes = total_volume
+A_eq = np.ones((1, n))
+b_eq = np.array([float(total_volume)])
 
-bounds = [(0, total_volume) for _ in costs]
+# Inequality: Ethanol volume >= min_ethanol_ratio * total_volume  →  -Ethanol_vol <= -min_required
+ethanol_mask = (blendstocks['name'] == 'Ethanol').astype(int).values
+A_ub = (-ethanol_mask).reshape(1, n)
+b_ub = np.array([-float(total_volume) * float(min_ethanol_ratio)])
 
-result = linprog(c=costs, A_eq=A_eq, b_eq=B_eq, A_ub=[A_ub], b_ub=B_ub, bounds=bounds, method='highs')
+# Bounds for each variable (0 to total_volume)
+bounds = [(0.0, float(total_volume)) for _ in range(n)]
+
+# Run LP
+result = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
 
 # ------------------------------
 # 📊 RESULTS
