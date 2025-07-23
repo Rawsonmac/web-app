@@ -92,6 +92,20 @@ import json
 
 with open('blendstocks.json', 'r') as f:
     blendstock_data = json.load(f)
+except FileNotFoundError:
+    st.error("Error: 'blendstocks.json' not found. Please ensure the file exists in the project directory.")
+    st.stop()
+except json.JSONDecodeError:
+    st.error("Error: Invalid JSON format in 'blendstocks.json'. Please check the file content.")
+    st.stop()
+
+blendstocks = pd.DataFrame({
+    'name': list(blendstock_data.keys()),
+    'base_price': [blend_prices.get(name, data['base_price']) for name, data in blendstock_data.items()],
+    'rin_type': [data['rin_type'] for data in blendstock_data.values()],
+    'rin_yield': [data['rin_yield'] for data in blendstock_data.values()],
+    'lcfs_credits': [data['lcfs_credits'] for data in blendstock_data.values()]
+})   
 
     
 blendstocks = pd.DataFrame({
