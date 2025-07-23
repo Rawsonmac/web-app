@@ -11,8 +11,8 @@ st.set_page_config(page_title="RIN / LCFS Optimizer", layout="wide")
 st.title("OIL BROKERAGE")
 st.markdown(
     """
-    Optimize blend cost with **RIN / LCFS credits** and meet **spec constraints** (RVP, Octane, BTU, Sulfur, Aromatics, Oxygen, Benzene, CI). 
-    Choose single or **multi-objective** mode and run **sensitivity** instantly.
+    Enter a target octane and total volume to optimize a gasoline blend at the **lowest cost** with **RIN / LCFS credits**. 
+    Other constraints are automatically adjusted to ensure feasibility.
     """
 )
 
@@ -38,7 +38,7 @@ DEFAULT_PRICES = {
     "ULSD": 3.00
 }
 
-# Physical/Regulatory properties (includes cetane for diesel blendstocks)
+# Physical/Regulatory properties
 DEFAULT_PROPS = pd.DataFrame({
     'name': ["Ethanol", "Biodiesel", "Renewable Diesel", "Gasoline", "ULSD"],
     'rvp': [18.0, 0.0, 0.0, 9.0, 0.0],
@@ -113,14 +113,6 @@ for n,dv in DEFAULT_PRICES.items():
     tag = "live" if lv is not None else "fallback"
     final_prices[n] = st.sidebar.number_input(f"{n} ({tag})", value=float(lv or dv))
 
-st.sidebar.subheader("Component Min/Max %")
-comp_bounds = {}
-for comp in DEFAULT_PRICES.keys():
-    with st.sidebar.expander(comp, expanded=False):
-        mn = st.number_input(f"{comp} min %", value=0.0 if comp not in ['Ethanol', 'Gasoline'] else 0.1, min_value=0.0, max_value=1.0, key=f"mn_{comp}")
-        mx = st.number_input(f"{comp} max %", value=1.0, min_value=0.0, max_value=1.0, key=f"mx_{comp}")
-        comp_bounds[comp]=(mn,mx)
-
 if failures:
     with st.sidebar.expander("API errors"):
         for n,m in failures.items(): st.write(f"**{n}**: {m}")
@@ -128,49 +120,31 @@ if failures:
 # ------------------------------
 # MAIN INPUTS
 # ------------------------------
-col1,col2,col3,col4 = st.columns(4)
+st.markdown("### Target Specifications")
+col1,col2,col3 = st.columns(3)
 with col1:
     total_volume = st.number_input("Total Volume (gal)", value=100_000, min_value=0)
 with col2:
-    min_ethanol_ratio = st.slider("Min Ethanol %", 0.0, 1.0, 0.10)
+    min_oct = st.number_input("Target Octane", value=91.0, min_value=0.0)
 with col3:
-    show_charts = st.checkbox("Charts", True)
-with col4:
     market_price = st.number_input("Market Price ($/gal)", value=3.00, min_value=0.0)
 
-st.markdown("### Spec Constraints")
-s1,s2,s3 = st.columns(3)
-with s1:
-    enable_rvp_nl = st.checkbox("Use non-linear RVP", value=False)
+# Optional advanced constraints
+with st.expander("Advanced Constraints (optional)", expanded=False):
     enable_rvp = st.checkbox("Max RVP", value=False)
-    max_rvp = st.number_input("Max RVP (psi)", value=15.0, min_value=0.0, disabled=not enable_rvp)  # Increased default for high Ethanol
-with s2:
-    enable_oct = st.checkbox("Min Octane", value=True)
-    min_oct = st.number_input("Min Octane", value=90.0, min_value=0.0, disabled=not enable_oct)
+    max_rvp = st.number_input("Max RVP (psi)", value=15.0, min_value=0.0, disabled=not enable_rvp)
     enable_sulfur = st.checkbox("Max Sulfur (ppm)", value=False)
     max_sul = st.number_input("Max Sulfur", value=30.0, min_value=0.0, disabled=not enable_sulfur)
-with s3:
     enable_btu = st.checkbox("Min BTU (k/gal)", value=False)
     min_btu = st.number_input("Min BTU", value=110.0, min_value=0.0, disabled=not enable_btu)
     enable_ci = st.checkbox("Max CI (gCO₂e/MJ)", value=False)
     max_ci = st.number_input("Max CI", value=90.0, min_value=0.0, disabled=not enable_ci)
-
-s4,s5 = st.columns(2)
-with s4:
     enable_arom = st.checkbox("Max Aromatics %", value=False)
     max_arom = st.number_input("Max Arom %", value=25.0, min_value=0.0, disabled=not enable_arom)
-    enable_benz = st.checkbox("Max Benzene %", value=False)
-    max_benz = st.number_input("Max Benzene %", value=1.0, min_value=0.0, disabled=not enable_benz)
-with s5:
     enable_oxy = st.checkbox("Max Oxygen %", value=False)
     max_oxy = st.number_input("Max Oxygen %", value=10.0, min_value=0.0, disabled=not enable_oxy)
-
-st.markdown("### Objective Mode")
-mo1, mo2 = st.columns([2,1])
-with mo1:
-    obj_mode = st.selectbox("Objective", ["Min Cost","Cost vs CI"], index=0)
-with mo2:
-    weight_ci = st.slider("Weight CI (0=ignore,1=only CI)", 0.0,1.0,0.3,disabled=(obj_mode=="Min Cost"))
+    enable_benz = st.checkbox("Max Benzene %", value=False)
+    max_benz = st.number_input("Max Benzene %", value=1.0, min_value=0.0, disabled=not enable_benz)
 
 # ------------------------------
 # DISPLAY FEEDSTOCK PROPERTIES
@@ -218,137 +192,84 @@ def eff_cost(r):
 
 blendstocks['effective_price'] = blendstocks.apply(eff_cost, axis=1)
 
-# Carbon intensity cost term (normalized)
-ci_vec = blendstocks['ci_gmj'].fillna(0).astype(float).values
-ci_norm = (ci_vec - ci_vec.min())/(ci_vec.max()-ci_vec.min()+1e-9)
-
-# Objective vector
+# Objective vector (always minimize cost)
 costs = blendstocks['effective_price'].astype(float).values
-if obj_mode=="Cost vs CI":
-    costs = (1-weight_ci)*costs + weight_ci*ci_norm  # weighted sum
-
 n = len(costs)
 A_eq = np.ones((1,n))
 b_eq = np.array([float(total_volume)])
 
-# Bounds
-bounds=[]
-for i,row in blendstocks.iterrows():
-    mn,mx = comp_bounds[row['name']]
-    bounds.append((mn*total_volume, mx*total_volume))
+# Compute minimum Ethanol needed for target octane
+eth_idx = blendstocks['name'] == 'Ethanol'
+min_eth_oct = min_oct / blendstocks.loc[eth_idx, 'octane'].iloc[0] if blendstocks.loc[eth_idx, 'octane'].iloc[0] > 0 else 1.0
+min_ethanol_ratio = min_eth_oct
 
-# Adjust constraints for octane feasibility
-if enable_oct:
-    max_oct = sum(blendstocks['octane'] * [b[1]/total_volume for b in bounds])
-    if min_oct > max_oct:
-        st.warning(f"Minimum octane {min_oct} exceeds maximum feasible octane {max_oct:.2f}. Adjusting component bounds and constraints.")
-        # Adjust min_ethanol_ratio
-        eth_idx = blendstocks['name'] == 'Ethanol'
-        min_eth_oct = min_oct / blendstocks.loc[eth_idx, 'octane'].iloc[0] if blendstocks.loc[eth_idx, 'octane'].iloc[0] > 0 else 1.0
-        min_ethanol_ratio = max(min_ethanol_ratio, min_eth_oct)
-        comp_bounds['Ethanol'] = (min_ethanol_ratio, 1.0)
-        # Relax diesel minimums
-        for comp in ['Biodiesel', 'Renewable Diesel', 'ULSD']:
-            comp_bounds[comp] = (0.0, comp_bounds[comp][1])
-        # Update bounds
-        bounds = []
-        for i,row in blendstocks.iterrows():
-            mn,mx = comp_bounds[row['name']]
-            bounds.append((mn*total_volume, mx*total_volume))
-        # Adjust RVP to accommodate Ethanol
-        if enable_rvp:
-            max_rvp = max(max_rvp, blendstocks.loc[eth_idx, 'rvp'].iloc[0] * min_ethanol_ratio)
-        # Relax other constraints to feasible maximums
-        if enable_sulfur:
-            max_sul = max(max_sul, (blendstocks['sulfur_ppm'] * [b[1]/total_volume for b in bounds]).sum())
-        if enable_arom:
-            max_arom = max(max_arom, (blendstocks['arom_pct'] * [b[1]/total_volume for b in bounds]).sum())
-        if enable_oxy:
-            max_oxy = max(max_oxy, (blendstocks['oxy_pct'] * [b[1]/total_volume for b in bounds]).sum())
-        if enable_benz:
-            max_benz = max(max_benz, (blendstocks['benz_pct'] * [b[1]/total_volume for b in bounds]).sum())
-        if enable_ci and obj_mode=="Min Cost":
-            max_ci = max(max_ci, (blendstocks['ci_gmj'] * [b[1]/total_volume for b in bounds]).sum())
-        st.info(f"Adjusted constraints: min_ethanol_ratio={min_ethanol_ratio:.2f}, max_rvp={max_rvp:.2f}, max_sul={max_sul:.2f}, max_arom={max_arom:.2f}, max_oxy={max_oxy:.2f}, max_benz={max_benz:.2f}, max_ci={max_ci:.2f}")
+# Component bounds (flexible to ensure feasibility)
+comp_bounds = {comp: (0.0, 1.0) for comp in DEFAULT_PRICES.keys()}
+comp_bounds['Ethanol'] = (min_ethanol_ratio, 1.0)  # Ensure enough Ethanol for octane
+bounds = [(comp_bounds[row['name']][0]*total_volume, comp_bounds[row['name']][1]*total_volume) for i,row in blendstocks.iterrows()]
+
+# Adjust constraints for feasibility
+max_rvp = max(max_rvp, blendstocks.loc[eth_idx, 'rvp'].iloc[0] * min_ethanol_ratio) if enable_rvp else float('inf')
+max_sul = max(max_sul, (blendstocks['sulfur_ppm'] * [b[1]/total_volume for b in bounds]).sum()) if enable_sulfur else float('inf')
+max_arom = max(max_arom, (blendstocks['arom_pct'] * [b[1]/total_volume for b in bounds]).sum()) if enable_arom else float('inf')
+max_oxy = max(max_oxy, (blendstocks['oxy_pct'] * [b[1]/total_volume for b in bounds]).sum()) if enable_oxy else float('inf')
+max_benz = max(max_benz, (blendstocks['benz_pct'] * [b[1]/total_volume for b in bounds]).sum()) if enable_benz else float('inf')
+max_ci = max(max_ci, (blendstocks['ci_gmj'] * [b[1]/total_volume for b in bounds]).sum()) if enable_ci else float('inf')
+min_btu = min(min_btu, (blendstocks['btu'] * [b[0]/total_volume for b in bounds]).sum()) if enable_btu else 0.0
+
+# Display adjusted constraints
+if any([enable_rvp, enable_sulfur, enable_btu, enable_ci, enable_arom, enable_oxy, enable_benz]):
+    st.info(f"Adjusted constraints: min_ethanol_ratio={min_ethanol_ratio:.2f}, max_rvp={max_rvp:.2f}, max_sul={max_sul:.2f}, max_arom={max_arom:.2f}, max_oxy={max_oxy:.2f}, max_benz={max_benz:.2f}, max_ci={max_ci:.2f}, min_btu={min_btu:.2f}")
 
 # Inequalities
-A_ub_list=[]; b_ub_list=[]
-# Ethanol min
+A_ub_list = []
+b_ub_list = []
 eth = (blendstocks['name']=='Ethanol').astype(int).values
 A_ub_list.append(-eth); b_ub_list.append(-total_volume*min_ethanol_ratio)
 
-# Linear specs
 def add_le(vec, limit):
     A_ub_list.append(vec); b_ub_list.append(limit)
 
 def add_ge(vec, limit):
     A_ub_list.append(-vec); b_ub_list.append(-limit)
 
-if enable_rvp and not enable_rvp_nl:
+add_ge(blendstocks['octane'].values, min_oct*total_volume)  # Always enforce octane
+if enable_rvp:
     add_le(blendstocks['rvp'].values, max_rvp*total_volume)
-if enable_oct: 
-    add_ge(blendstocks['octane'].values, min_oct*total_volume)
-if enable_btu: 
+if enable_btu:
     add_ge(blendstocks['btu'].values, min_btu*total_volume)
-if enable_sulfur: 
+if enable_sulfur:
     add_le(blendstocks['sulfur_ppm'].values, max_sul*total_volume)
-if enable_arom:   
+if enable_arom:
     add_le(blendstocks['arom_pct'].values, max_arom*total_volume)
-if enable_oxy:    
+if enable_oxy:
     add_le(blendstocks['oxy_pct'].values, max_oxy*total_volume)
-if enable_benz:   
+if enable_benz:
     add_le(blendstocks['benz_pct'].values, max_benz*total_volume)
-if enable_ci and obj_mode=="Min Cost":  
+if enable_ci:
     add_le(blendstocks['ci_gmj'].values, max_ci*total_volume)
 
-# Stack
 A_ub = np.vstack(A_ub_list) if A_ub_list else None
-b_ub = np.array(b_ub_list)  if A_ub_list else None
+b_ub = np.array(b_ub_list) if A_ub_list else None
 
-# If non-linear RVP is enabled, do quick iterative linearization
-if enable_rvp and enable_rvp_nl:
-    x_guess = np.array([b[0] for b in bounds])
-    x_guess[eth.argmax()] = min_ethanol_ratio*total_volume
-    x_guess = x_guess + (total_volume - x_guess.sum())/n
-    def rvp_nl(x):
-        wi = x/ (x.sum()+1e-9)
-        return np.exp((wi*np.log(blendstocks['rvp'].values+1)).sum())-1
-    for _ in range(3):
-        base = rvp_nl(x_guess)
-        grad = []
-        eps = 1e-3*total_volume
-        for i in range(n):
-            xx = x_guess.copy(); xx[i]+=eps
-            grad.append((rvp_nl(xx)-base)/eps)
-        grad = np.array(grad)
-        A_ub_nl = grad
-        b_ub_nl = grad@x_guess + (max_rvp - base)*total_volume/total_volume
-        if A_ub is None:
-            A_ub = A_ub_nl.reshape(1,-1); b_ub = np.array([b_ub_nl])
-        else:
-            A_ub = np.vstack([A_ub, A_ub_nl])
-            b_ub = np.hstack([b_ub, b_ub_nl])
-        res_tmp = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
-        if not res_tmp.success: break
-        x_guess = res_tmp.x
-
-# Solve final LP
+# Solve LP
 res = linprog(c=costs, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
 
 if res.success:
-    blendstocks['blended_volume']=res.x
+    blendstocks['blended_volume'] = res.x
     tot = total_volume if total_volume else 1
-    blendstocks['blended_cost']=blendstocks['blended_volume']*blendstocks['effective_price']
+    blendstocks['blended_cost'] = blendstocks['blended_volume'] * blendstocks['effective_price']
     total_cost = blendstocks['blended_cost'].sum()
-    avg_cost = total_cost/tot
+    avg_cost = total_cost / tot
 
     ethanol_vol = blendstocks.loc[blendstocks['name']=='Ethanol','blended_volume'].iloc[0]
     def vavg(col):
-        return float((blendstocks[col]*blendstocks['blended_volume']).sum()/tot)
-    act_rvp = vavg('rvp'); act_oct=vavg('octane'); act_btu=vavg('btu')
-    act_sul=vavg('sulfur_ppm'); act_ar=vavg('arom_pct'); act_oxy=vavg('oxy_pct'); act_bz=vavg('benz_pct'); act_ci=vavg('ci_gmj')
+        return float((blendstocks[col] * blendstocks['blended_volume']).sum() / tot)
+    act_rvp = vavg('rvp'); act_oct = vavg('octane'); act_btu = vavg('btu')
+    act_sul = vavg('sulfur_ppm'); act_ar = vavg('arom_pct'); act_oxy = vavg('oxy_pct')
+    act_bz = vavg('benz_pct'); act_ci = vavg('ci_gmj')
 
-    # Diagnostic: Feasible property ranges
+    # Feasible property ranges
     st.subheader("Feasible Property Ranges")
     props = ['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']
     ranges = {}
@@ -358,7 +279,7 @@ if res.success:
         ranges[prop] = (min_val, max_val)
     st.write(pd.DataFrame(ranges, index=['Min', 'Max']).T)
 
-    # cards
+    # Metrics
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Total Cost", f"${total_cost:,.2f}")
     c2.metric("Avg Net $/gal", f"${avg_cost:,.3f}")
@@ -373,13 +294,13 @@ if res.success:
     profit = revenue - total_cost
     profit_per_gal = profit / total_volume if total_volume else 0
     if profit < 0:
-        st.warning("Profit is negative. Consider increasing market price or further relaxing constraints.")
+        st.warning("Profit is negative. Consider increasing market price or adding high-octane blendstocks.")
 
     c1, c2 = st.columns(2)
     c1.metric("Total Profit", f"${profit:,.2f}")
     c2.metric("Profit per Gallon", f"${profit_per_gal:,.3f}")
 
-    view_cols=['name','base_price','effective_price','rvp','octane','cetane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
+    view_cols = ['name','base_price','effective_price','rvp','octane','cetane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
     nice = blendstocks[view_cols].rename(columns={
         'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','rvp':'RVP (psi)',
         'octane':'Octane','cetane':'Cetane','btu':'BTU (k/gal)','sulfur_ppm':'Sulfur (ppm)',
@@ -388,7 +309,6 @@ if res.success:
     })
     nice = nice.round(2).astype(str).replace('0.0', '0.00')
 
-    # Add summary row
     summary = pd.DataFrame({
         'Component': ['Total'],
         'Base $/gal': [''], 'Net $/gal': [f"{avg_cost:.3f}"], 'RVP (psi)': [f"{act_rvp:.2f}"], 'Octane': [f"{act_oct:.2f}"],
@@ -405,7 +325,7 @@ if res.success:
     csv = nice.to_csv(index=False)
     st.download_button("Download CSV", csv, file_name="blend_optimization.csv", mime="text/csv")
 
-    if show_charts:
+    if st.checkbox("Show Charts", True):
         vol_chart = alt.Chart(nice[:-1]).mark_arc().encode(
             theta=alt.Theta("Gallons:Q"), 
             color="Component:N", 
@@ -432,19 +352,6 @@ if res.success:
         )
         st.altair_chart(profit_chart, use_container_width=True)
 
-    # Shadow prices
-    st.subheader("Constraint Shadow Prices (marginals)")
-    try:
-        m_e = res.eqlin.marginals if hasattr(res, 'eqlin') else []
-        m_i = res.ineqlin.marginals if hasattr(res, 'ineqlin') else []
-        df_dual = pd.DataFrame({
-            'type':['eq']*len(m_e)+['ineq']*len(m_i),
-            'marginal':np.concatenate([m_e,m_i])
-        })
-        st.dataframe(df_dual)
-    except Exception:
-        st.info("Solver did not return marginals in this SciPy version.")
-
     # Sensitivity analysis
     st.subheader("Sensitivity (±10% shocks)")
     sens_targets = {
@@ -455,7 +362,7 @@ if res.success:
         'Ethanol price': ('price','Ethanol'),
         'Market price': ('market', None)
     }
-    results=[]
+    results = []
     base_total = total_cost
     base_profit = profit
     for lbl,(typ,key) in sens_targets.items():
@@ -475,8 +382,6 @@ if res.success:
                 return fp[r['name']] - rinv - lcfsv
             bs_tmp['effective_price'] = bs_tmp.apply(ec2,axis=1)
             ctmp = bs_tmp['effective_price'].values
-            if obj_mode=="Cost vs CI":
-                ctmp = (1-weight_ci)*ctmp + weight_ci*ci_norm
             res2 = linprog(c=ctmp, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, method='highs')
             if res2.success:
                 tot2 = (res2.x*bs_tmp['effective_price'].values).sum()
@@ -501,7 +406,7 @@ if res.success:
         st.altair_chart(bar, use_container_width=True)
 
 else:
-    st.error(f"Optimization failed: {res.message}. Relax constraints further or add high-octane blendstocks (e.g., Premium Gasoline).")
-    st.write("Try increasing max_rvp, max_sul, max_arom, max_oxy, max_benz, or max_ci, or adjust component bounds to allow more Ethanol/Gasoline.")
+    st.error(f"Optimization failed: {res.message}. Target octane {min_oct} may be too high.")
+    st.write("Try reducing target octane, increasing total volume, or adding a high-octane blendstock (e.g., Premium Gasoline, octane=91.0).")
 
-st.caption("Non-linear RVP uses log-sum approximation. For exact thermodynamic mixing, switch to a nonlinear solver.")
+st.caption("All constraints are automatically adjusted to ensure the target octane is achievable at the lowest cost. Use 'Advanced Constraints' for additional control.")
