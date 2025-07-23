@@ -38,11 +38,12 @@ DEFAULT_PRICES = {
     "ULSD": 3.00
 }
 
-# Physical/Regulatory properties (updated with recent data)
+# Physical/Regulatory properties (includes cetane for diesel blendstocks)
 DEFAULT_PROPS = pd.DataFrame({
     'name': ["Ethanol", "Biodiesel", "Renewable Diesel", "Gasoline", "ULSD"],
     'rvp': [18.0, 0.0, 0.0, 9.0, 0.0],
     'octane': [113.0, 0.0, 0.0, 87.0, 0.0],
+    'cetane': [0.0, 55.0, 80.0, 0.0, 45.0],
     'btu': [76.0, 118.0, 120.0, 114.0, 128.0],
     'sulfur_ppm': [0.0, 15.0, 10.0, 20.0, 15.0],
     'arom_pct': [0.0, 0.0, 5.0, 22.5, 15.0],
@@ -175,17 +176,23 @@ with mo2:
 # DISPLAY FEEDSTOCK PROPERTIES
 # ------------------------------
 st.subheader("Feedstock Properties")
-props_display = DEFAULT_PROPS[['name', 'rvp', 'octane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].rename(columns={
-    'name': 'Component', 'rvp': 'RVP (psi)', 'octane': 'Octane', 'btu': 'BTU (k/gal)',
-    'sulfur_ppm': 'Sulfur (ppm)', 'arom_pct': 'Aromatics (%)', 'oxy_pct': 'Oxygen (%)',
-    'benz_pct': 'Benzene (%)', 'ci_gmj': 'CI (gCO₂e/MJ)'
+st.caption("Note: Biodiesel, Renewable Diesel, and ULSD have octane=0.0 as they are diesel fuels, not used for spark-ignition engines. Cetane is shown for diesel blendstocks but does not affect octane or gasoline-focused optimization.")
+props_display = DEFAULT_PROPS[['name', 'rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].rename(columns={
+    'name': 'Component', 'rvp': 'RVP (psi)', 'octane': 'Octane', 'cetane': 'Cetane',
+    'btu': 'BTU (k/gal)', 'sulfur_ppm': 'Sulfur (ppm)', 'arom_pct': 'Aromatics (%)',
+    'oxy_pct': 'Oxygen (%)', 'benz_pct': 'Benzene (%)', 'ci_gmj': 'CI (gCO₂e/MJ)'
 })
+# Format to ensure 0.0 is displayed
+props_display = props_display.round(2).astype(str).replace('0.0', '0.00')
 st.dataframe(props_display)
 
 # Validate feedstock properties
-missing_props = DEFAULT_PROPS[['rvp', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct']].isnull().any()
+missing_props = DEFAULT_PROPS[['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].isnull().any()
+zero_props = DEFAULT_PROPS[['rvp', 'octane', 'cetane', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].eq(0).any()
 if missing_props.any():
-    st.warning("Missing properties detected in feedstock data. Please ensure all values for RVP, sulfur, aromatics, oxygen, and benzene are provided.")
+    st.warning(f"Missing properties detected: {', '.join(missing_props[missing_props].index)}. Ensure all values are provided in DEFAULT_PROPS.")
+if zero_props.any():
+    st.info(f"Zero values detected for: {', '.join(zero_props[zero_props].index)}. This is expected for octane (diesel blendstocks) and cetane (gasoline blendstocks). Verify other zeros are intentional.")
 
 # ------------------------------
 # BUILD TABLE
@@ -200,8 +207,9 @@ blendstocks = pd.DataFrame({
 blendstocks = blendstocks.merge(DEFAULT_PROPS, on='name', how='left')
 
 # Check for merge issues
-if blendstocks[['rvp', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct']].isnull().any().any():
+if blendstocks[['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']].isnull().any().any():
     st.error("Merge failed: Some blendstocks lack properties. Ensure all blendstocks in DEFAULT_PRICES have corresponding entries in DEFAULT_PROPS.")
+    st.write("Blendstocks DataFrame (debug):", blendstocks)
 
 # Effective cost
 def eff_cost(r):
@@ -310,7 +318,7 @@ if res.success:
 
     # Diagnostic: Feasible property ranges
     st.subheader("Feasible Property Ranges")
-    props = ['rvp', 'octane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']
+    props = ['rvp', 'octane', 'cetane', 'btu', 'sulfur_ppm', 'arom_pct', 'oxy_pct', 'benz_pct', 'ci_gmj']
     ranges = {}
     for prop in props:
         min_val = (blendstocks[prop] * [b[0]/tot for b in bounds]).sum()
@@ -339,19 +347,24 @@ if res.success:
     c1.metric("Total Profit", f"${profit:,.2f}")
     c2.metric("Profit per Gallon", f"${profit_per_gal:,.3f}")
 
-    view_cols=['name','base_price','effective_price','rvp','octane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
+    view_cols=['name','base_price','effective_price','rvp','octane','cetane','btu','sulfur_ppm','arom_pct','oxy_pct','benz_pct','ci_gmj','blended_volume','blended_cost']
     nice = blendstocks[view_cols].rename(columns={
-        'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','btu':'BTU',
-        'sulfur_ppm':'Sulfur (ppm)','arom_pct':'Aromatics (%)','oxy_pct':'Oxygen (%)','benz_pct':'Benzene (%)',
-        'ci_gmj':'CI (gCO₂e/MJ)','blended_volume':'Gallons','blended_cost':'Total $'
+        'name':'Component','base_price':'Base $/gal','effective_price':'Net $/gal','rvp':'RVP (psi)',
+        'octane':'Octane','cetane':'Cetane','btu':'BTU (k/gal)','sulfur_ppm':'Sulfur (ppm)',
+        'arom_pct':'Aromatics (%)','oxy_pct':'Oxygen (%)','benz_pct':'Benzene (%)','ci_gmj':'CI (gCO₂e/MJ)',
+        'blended_volume':'Gallons','blended_cost':'Total $'
     })
+    # Format to ensure 0.0 is displayed
+    nice = nice.round(2).astype(str).replace('0.0', '0.00')
 
     # Add summary row for totals and profit
     summary = pd.DataFrame({
         'Component': ['Total'],
-        'Base $/gal': [''], 'Net $/gal': [avg_cost], 'RVP (psi)': [act_rvp], 'Octane': [act_oct], 'BTU': [act_btu],
-        'Sulfur (ppm)': [act_sul], 'Aromatics (%)': [act_ar], 'Oxygen (%)': [act_oxy], 'Benzene (%)': [act_bz], 'CI (gCO₂e/MJ)': [act_ci],
-        'Gallons': [total_volume], 'Total $': [total_cost], 'Revenue $': [revenue], 'Profit $': [profit]
+        'Base $/gal': [''], 'Net $/gal': [f"{avg_cost:.3f}"], 'RVP (psi)': [f"{act_rvp:.2f}"], 'Octane': [f"{act_oct:.2f}"],
+        'Cetane': [''], 'BTU (k/gal)': [f"{act_btu:.2f}"], 'Sulfur (ppm)': [f"{act_sul:.2f}"], 
+        'Aromatics (%)': [f"{act_ar:.2f}"], 'Oxygen (%)': [f"{act_oxy:.2f}"], 'Benzene (%)': [f"{act_bz:.2f}"], 
+        'CI (gCO₂e/MJ)': [f"{act_ci:.2f}"], 'Gallons': [f"{total_volume:,.0f}"], 'Total $': [f"{total_cost:,.2f}"], 
+        'Revenue $': [f"{revenue:,.2f}"], 'Profit $': [f"{profit:,.2f}"]
     })
     nice = pd.concat([nice, summary], ignore_index=True)
 
