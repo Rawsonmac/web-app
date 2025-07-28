@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
+import re
 
 # Set page configuration for a cleaner look
 st.set_page_config(page_title="Stock Data Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -13,6 +14,7 @@ st.markdown("""
     .stButton>button {width: 100%; padding: 10px; font-size: 16px;}
     .stTextInput>div>div>input {font-size: 16px;}
     .stDateInput>div>div>input {font-size: 16px;}
+    .stSelectbox>div>div>select {font-size: 16px;}
     h1, h2, h3 {color: #1f2a44;}
     .sidebar .sidebar-content {background-color: #f8f9fa;}
     </style>
@@ -31,23 +33,42 @@ with st.sidebar:
         help="Enter a valid stock ticker symbol (e.g., AAPL for Apple)."
     )
 
-    # Date range inputs with defaults
+    # Date range selection
+    date_range = st.selectbox(
+        "Date Range",
+        ["Last 7 Days", "Last 30 Days", "Last 3 Months", "Custom"],
+        help="Select a predefined range or choose Custom for specific dates."
+    )
+
+    # Set default dates
     default_end = datetime.today()
     default_start = default_end - timedelta(days=30)
-    start_date = st.date_input(
-        "Start Date",
-        value=default_start,
-        min_value=datetime(2000, 1, 1),
-        max_value=default_end,
-        help="Select the start date for the data."
-    )
-    end_date = st.date_input(
-        "End Date",
-        value=default_end,
-        min_value=start_date,
-        max_value=default_end,
-        help="Select the end date for the data."
-    )
+
+    # Adjust dates based on selection
+    if date_range == "Last 7 Days":
+        start_date = default_end - timedelta(days=7)
+        end_date = default_end
+    elif date_range == "Last 30 Days":
+        start_date = default_end - timedelta(days=30)
+        end_date = default_end
+    elif date_range == "Last 3 Months":
+        start_date = default_end - timedelta(days=90)
+        end_date = default_end
+    else:
+        start_date = st.date_input(
+            "Start Date",
+            value=default_start,
+            min_value=datetime(2000, 1, 1),
+            max_value=default_end,
+            help="Select the start date for the data."
+        )
+        end_date = st.date_input(
+            "End Date",
+            value=default_end,
+            min_value=start_date,
+            max_value=default_end,
+            help="Select the end date for the data."
+        )
 
     # Button to fetch data
     fetch_button = st.button("Get Stock Data")
@@ -62,19 +83,24 @@ if 'stock_data' not in st.session_state:
 
 # Fetch and display data when button is clicked
 if fetch_button:
-    try:
-        # Fetch stock data
-        stock = yf.Ticker(ticker)
-        st.session_state.stock_data = stock.history(start=start_date, end=end_date)
+    # Validate ticker input
+    if not ticker or not re.match(r'^[A-Z]{1,5}$', ticker):
+        st.error("Please enter a valid stock ticker (e.g., AAPL, GOOGL, 1-5 uppercase letters).")
+    else:
+        with st.spinner("Fetching stock data..."):
+            try:
+                # Fetch stock data
+                stock = yf.Ticker(ticker)
+                st.session_state.stock_data = stock.history(start=start_date, end=end_date)
 
-        # Fetch stock info
-        stock_info = stock.info
+                # Fetch stock info
+                stock_info = stock.info
 
-        # Display error if no data is found
-        if st.session_state.stock_data.empty:
-            st.error("No data found for the given ticker or date range. Please check your inputs.")
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}. Try a valid ticker like AAPL or GOOGL.")
+                # Display error if no data is found
+                if st.session_state.stock_data.empty:
+                    st.error("No data found for the given ticker or date range. Please check your inputs.")
+            except Exception as e:
+                st.error(f"Error fetching data: {str(e)}. Try a valid ticker like AAPL or GOOGL.")
 
 # Tabs for organizing content
 if st.session_state.stock_data is not None and not st.session_state.stock_data.empty:
